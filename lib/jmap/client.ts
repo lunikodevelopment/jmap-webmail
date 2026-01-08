@@ -1,4 +1,4 @@
-import type { Email, Mailbox, StateChange, AccountStates, Thread, Identity } from "./types";
+import type { Email, Mailbox, StateChange, AccountStates, Thread, Identity, Contact, ContactGroup } from "./types";
 
 // JMAP protocol types - these are intentionally flexible due to server variations
 interface JMAPSession {
@@ -1505,5 +1505,272 @@ export class JMAPClient {
 
   setLastStates(states: AccountStates): void {
     this.lastStates = { ...states };
+  }
+
+  // Contact management methods
+  async getContacts(): Promise<Contact[]> {
+    try {
+      console.log('Getting all contacts for account:', this.accountId);
+      const response = await this.request([
+        ["ContactCard/get", {
+          accountId: this.accountId,
+          ids: null, // Get all contacts
+        }, "0"],
+      ]);
+
+      if (response.methodResponses?.[0]?.[0] === "ContactCard/get") {
+        const contactCards = response.methodResponses[0][1].list || [];
+        console.log('Fetched contacts:', contactCards.length);
+        return contactCards.map((card: any) => this.mapContactCardToContact(card));
+      }
+
+      return [];
+    } catch (error) {
+      console.error('Failed to get contacts:', error);
+      return [];
+    }
+  }
+
+  async getContact(contactId: string): Promise<Contact | null> {
+    try {
+      const response = await this.request([
+        ["ContactCard/get", {
+          accountId: this.accountId,
+          ids: [contactId],
+          properties: [
+            "uid",
+            "n",
+            "fn",
+            "email",
+            "tel",
+            "adr",
+            "org",
+            "title",
+            "note",
+            "photo",
+            "categories",
+            "created",
+            "updated",
+          ],
+        }, "0"],
+      ]);
+
+      if (response.methodResponses?.[0]?.[0] === "ContactCard/get") {
+        const contacts = response.methodResponses[0][1].list || [];
+        if (contacts.length > 0) {
+          return this.mapContactCardToContact(contacts[0]);
+        }
+      }
+
+      return null;
+    } catch (error) {
+      console.error('Failed to get contact:', error);
+      return null;
+    }
+  }
+
+  async createContact(contact: Omit<Contact, 'id'>): Promise<string> {
+    try {
+      const contactCard = this.mapContactToContactCard(contact);
+      const contactId = `contact-${Date.now()}`;
+
+      const response = await this.request([
+        ["ContactCard/set", {
+          accountId: this.accountId,
+          create: {
+            [contactId]: contactCard,
+          },
+        }, "0"],
+      ]);
+
+      if (response.methodResponses?.[0]?.[0] === "ContactCard/set") {
+        const result = response.methodResponses[0][1];
+        if (result.created?.[contactId]) {
+          return result.created[contactId].id;
+        }
+      }
+
+      throw new Error('Failed to create contact');
+    } catch (error) {
+      console.error('Failed to create contact:', error);
+      throw error;
+    }
+  }
+
+  async updateContact(contactId: string, contact: Partial<Contact>): Promise<void> {
+    try {
+      const contactCard = this.mapContactToContactCard(contact as Contact);
+
+      await this.request([
+        ["ContactCard/set", {
+          accountId: this.accountId,
+          update: {
+            [contactId]: contactCard,
+          },
+        }, "0"],
+      ]);
+    } catch (error) {
+      console.error('Failed to update contact:', error);
+      throw error;
+    }
+  }
+
+  async deleteContact(contactId: string): Promise<void> {
+    try {
+      await this.request([
+        ["ContactCard/set", {
+          accountId: this.accountId,
+          destroy: [contactId],
+        }, "0"],
+      ]);
+    } catch (error) {
+      console.error('Failed to delete contact:', error);
+      throw error;
+    }
+  }
+
+  private mapContactCardToContact(card: any): Contact {
+    // JSContact format from Stalwart
+    const fullName = card.name?.full || card.fn || '';
+    const nameComponents = card.name?.components || [];
+    
+    let firstName = '';
+    let lastName = '';
+    
+    for (const component of nameComponents) {
+      if (component.kind === 'given') firstName = component.value;
+      if (component.kind === 'surname') lastName = component.value;
+    }
+
+    const emails: Contact['emails'] = [];
+    if (card.emails) {
+      Object.entries(card.emails).forEach(([, emailData]: [string, any]) => {
+        emails.push({
+          type: emailData.contexts?.work ? 'work' : emailData.contexts?.home ? 'home' : 'other',
+          email: emailData.address,
+        });
+      });
+    }
+
+    const phones: Contact['phones'] = [];
+    if (card.phones) {
+      Object.entries(card.phones).forEach(([, phoneData]: [string, any]) => {
+        phones.push({
+          type: phoneData.contexts?.mobile ? 'mobile' : phoneData.contexts?.work ? 'work' : phoneData.contexts?.home ? 'home' : 'other',
+          number: phoneData.number,
+        });
+      });
+    }
+
+    const addresses: Contact['addresses'] = [];
+    if (card.addresses) {
+      Object.entries(card.addresses).forEach(([, addressData]: [string, any]) => {
+        addresses.push({
+          type: addressData.contexts?.work ? 'work' : addressData.contexts?.home ? 'home' : 'other',
+          street: addressData.street || addressData.full?.split('\n')[0] || '',
+          city: addressData.locality || '',
+          region: addressData.region || '',
+          postcode: addressData.postcode || '',
+          country: addressData.country || '',
+        });
+      });
+    }
+
+    return {
+      id: card.id || card.uid || '',
+      uid: card.uid || '',
+      name: fullName || `${firstName} ${lastName}`.trim(),
+      firstName,
+      lastName,
+      emails,
+      phones,
+      addresses,
+      organization: card.organizations?.[0]?.name || '',
+      jobTitle: card.titles?.[0]?.title || '',
+      notes: card.notes?.[0]?.note || '',
+      avatar: card.photos?.[0]?.url || '',
+      categories: card.categories || [],
+      createdAt: new Date(card.created || 0).toISOString(),
+      updatedAt: new Date(card.updated || 0).toISOString(),
+    };
+  }
+
+  private mapContactToContactCard(contact: Partial<Contact>): Record<string, any> {
+    // Convert to JSContact format for Stalwart
+    const card: Record<string, any> = {
+      version: '1.0',
+      kind: 'individual',
+    };
+
+    if (contact.name) {
+      card.fn = contact.name;
+      
+      const components = [];
+      if (contact.lastName) components.push({ kind: 'surname', value: contact.lastName });
+      if (contact.firstName) components.push({ kind: 'given', value: contact.firstName });
+      
+      if (components.length > 0) {
+        card.name = { 
+          full: contact.name,
+          components 
+        };
+      }
+    }
+
+    if (contact.emails && contact.emails.length > 0) {
+      card.emails = {};
+      contact.emails.forEach((email, idx) => {
+        card.emails[`email-${idx}`] = {
+          address: email.email,
+          contexts: email.type !== 'other' ? { [email.type as string]: true } : {},
+        };
+      });
+    }
+
+    if (contact.phones && contact.phones.length > 0) {
+      card.phones = {};
+      contact.phones.forEach((phone, idx) => {
+        card.phones[`phone-${idx}`] = {
+          number: phone.number,
+          contexts: phone.type !== 'other' ? { [phone.type as string]: true } : {},
+        };
+      });
+    }
+
+    if (contact.addresses && contact.addresses.length > 0) {
+      card.addresses = {};
+      contact.addresses.forEach((address, idx) => {
+        card.addresses[`address-${idx}`] = {
+          street: address.street,
+          locality: address.city,
+          region: address.region,
+          postcode: address.postcode,
+          country: address.country,
+          contexts: address.type !== 'other' ? { [address.type as string]: true } : {},
+        };
+      });
+    }
+
+    if (contact.organization) {
+      card.organizations = [{ name: contact.organization }];
+    }
+
+    if (contact.jobTitle) {
+      card.titles = [{ title: contact.jobTitle }];
+    }
+
+    if (contact.notes) {
+      card.notes = [{ note: contact.notes }];
+    }
+
+    if (contact.avatar) {
+      card.photos = [{ url: contact.avatar }];
+    }
+
+    if (contact.categories && contact.categories.length > 0) {
+      card.categories = contact.categories;
+    }
+
+    return card;
   }
 }

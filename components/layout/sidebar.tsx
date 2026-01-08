@@ -435,6 +435,18 @@ export function Sidebar({
                 )}
 
                 <div className="border-t border-border mt-2 pt-2">
+                  {/* Contacts */}
+                  <button
+                    onClick={() => router.push('/contacts')}
+                    className="w-full px-4 py-2 flex items-center justify-between hover:bg-muted transition-colors text-sm"
+                  >
+                    <span className="flex items-center gap-2">
+                      <Users className="w-4 h-4" />
+                      Contacts
+                    </span>
+                    <ChevronRight className="w-4 h-4 text-muted-foreground" />
+                  </button>
+
                   {/* Settings */}
                   <button
                     onClick={() => router.push('/settings')}

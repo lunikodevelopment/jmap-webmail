@@ -4,6 +4,7 @@ import { useState, useEffect, useRef } from "react";
 import { useTranslations } from "next-intl";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { ContactAutocomplete } from "@/components/contacts/contact-autocomplete";
 import { X, Paperclip, Send, Save, Check, Loader2, AlertCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuthStore } from "@/stores/auth-store";
@@ -370,12 +371,14 @@ export function EmailComposer({
 
           <div className="flex items-center gap-2">
             <span className="text-sm text-muted-foreground w-16">{t('to')}:</span>
-            <Input
-              type="email"
-              placeholder={t('to_placeholder')}
+            <ContactAutocomplete
               value={to}
-              onChange={(e) => setTo(e.target.value)}
-              className="flex-1 border-0 focus-visible:ring-0"
+              onChange={(e) => setTo(e)}
+              onSelectEmail={(email) => {
+                // Email is already added by the autocomplete component
+              }}
+              placeholder={t('to_placeholder')}
+              className="flex-1"
             />
             <div className="flex gap-1">
               <Button
@@ -400,12 +403,12 @@ export function EmailComposer({
           {showCc && (
             <div className="flex items-center gap-2">
               <span className="text-sm text-muted-foreground w-16">{t('cc_label')}</span>
-              <Input
-                type="email"
-                placeholder={t('cc_placeholder')}
+              <ContactAutocomplete
                 value={cc}
-                onChange={(e) => setCc(e.target.value)}
-                className="flex-1 border-0 focus-visible:ring-0"
+                onChange={(e) => setCc(e)}
+                onSelectEmail={() => {}}
+                placeholder={t('cc_placeholder')}
+                className="flex-1"
               />
             </div>
           )}
@@ -413,12 +416,12 @@ export function EmailComposer({
           {showBcc && (
             <div className="flex items-center gap-2">
               <span className="text-sm text-muted-foreground w-16">{t('bcc_label')}</span>
-              <Input
-                type="email"
-                placeholder={t('bcc_placeholder')}
+              <ContactAutocomplete
                 value={bcc}
-                onChange={(e) => setBcc(e.target.value)}
-                className="flex-1 border-0 focus-visible:ring-0"
+                onChange={(e) => setBcc(e)}
+                onSelectEmail={() => {}}
+                placeholder={t('bcc_placeholder')}
+                className="flex-1"
               />
             </div>
           )}

@@ -211,3 +211,51 @@ export interface AccountStates {
     Thread?: string;
   };
 }
+
+// Contact types (RFC 6350 vCard)
+export interface ContactAddress {
+  type?: 'home' | 'work' | 'other';
+  street?: string;
+  city?: string;
+  region?: string;
+  postcode?: string;
+  country?: string;
+}
+
+export interface ContactPhone {
+  type?: 'home' | 'work' | 'mobile' | 'fax' | 'pager' | 'other';
+  number: string;
+}
+
+export interface ContactEmail {
+  type?: 'home' | 'work' | 'other';
+  email: string;
+}
+
+export interface Contact {
+  id: string;
+  uid: string; // vCard UID
+  name: string; // Full name
+  firstName?: string;
+  lastName?: string;
+  nickName?: string;
+  emails: ContactEmail[];
+  phones?: ContactPhone[];
+  addresses?: ContactAddress[];
+  organization?: string;
+  jobTitle?: string;
+  notes?: string;
+  avatar?: string; // URL or data URI
+  categories?: string[]; // Tags/groups
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface ContactGroup {
+  id: string;
+  name: string;
+  description?: string;
+  memberIds: string[]; // IDs of contacts in group
+  createdAt?: string;
+  updatedAt?: string;
+}
