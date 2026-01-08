@@ -263,6 +263,12 @@ export function EmailComposer({
         ? identities.find(id => id.id === selectedIdentityId)
         : primaryIdentity;
 
+      // Ensure we have an identity to send from
+      if (!currentIdentity) {
+        console.error('No identity selected for sending');
+        return;
+      }
+
       onSend?.({
         to: toAddresses,
         cc: ccAddresses,
@@ -270,8 +276,8 @@ export function EmailComposer({
         subject,
         body,
         draftId: finalDraftId || undefined,
-        fromEmail: currentIdentity?.email,
-        identityId: currentIdentity?.id,
+        fromEmail: currentIdentity.email,
+        identityId: currentIdentity.id,
       });
 
       // Reset form

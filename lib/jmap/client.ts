@@ -1060,49 +1060,79 @@ export class JMAPClient {
       throw new Error('No sent mailbox found');
     }
 
-    // Use provided identity ID or fetch from server as fallback
+    // Fetch identities to get the full identity object (name + email)
+    const identityResponse = await this.request([
+      ["Identity/get", {
+        accountId: this.accountId,
+      }, "0"]
+    ]);
+
     let identityId = selectedIdentityId;
+    let selectedIdentity: { id: string; email: string; name: string } | null = null;
+
+    if (identityResponse.methodResponses?.[0]?.[0] === "Identity/get") {
+      const identities = (identityResponse.methodResponses[0][1].list || []) as { id: string; email: string; name: string }[];
+
+      if (selectedIdentityId) {
+        // Find the selected identity
+        selectedIdentity = identities.find((id) => id.id === selectedIdentityId) || null;
+        if (selectedIdentity) {
+          identityId = selectedIdentity.id;
+        }
+      } else if (identities.length > 0) {
+        // Use the first identity (or find one matching the fromEmail/username)
+        selectedIdentity = identities.find((id) => id.email === (fromEmail || this.username)) || identities[0];
+        identityId = selectedIdentity.id;
+      }
+    }
 
     if (!identityId) {
-      const identityResponse = await this.request([
-        ["Identity/get", {
-          accountId: this.accountId,
-        }, "0"]
-      ]);
-
       identityId = this.accountId; // fallback
-
-      if (identityResponse.methodResponses?.[0]?.[0] === "Identity/get") {
-        const identities = (identityResponse.methodResponses[0][1].list || []) as { id: string; email: string }[];
-
-        if (identities.length > 0) {
-          // Use the first identity (or find one matching the fromEmail/username)
-          const matchingIdentity = identities.find((id) => id.email === (fromEmail || this.username));
-          identityId = matchingIdentity?.id || identities[0].id;
-        }
-      }
     }
 
     const methodCalls: JMAPMethodCall[] = [];
 
-    // If we have a draftId, update it and remove draft keyword, move to Sent
-    // Otherwise, create a new email in Sent
+    // Prepare the 'from' field with name and email
+    const fromAddress = {
+      email: fromEmail || this.username,
+      ...(selectedIdentity?.name && { name: selectedIdentity.name })
+    };
+
+    // If we have a draftId, we need to create a new email (not update the draft)
+    // because the 'from' field is immutable in JMAP
     if (draftId) {
+      // Create a new email with the correct 'from' field and content
+      const newEmailId = `sent-${Date.now()}`;
       methodCalls.push(["Email/set", {
         accountId: this.accountId,
-        update: {
-          [draftId]: {
-            "keywords/$draft": false,
-            "keywords/$seen": true,
+        create: {
+          [newEmailId]: {
+            from: [fromAddress],
+            to: to.map(email => ({ email })),
+            cc: cc?.map(email => ({ email })),
+            bcc: bcc?.map(email => ({ email })),
+            subject: subject,
+            keywords: { "$seen": true },
             mailboxIds: { [sentMailbox.id]: true },
+            bodyValues: {
+              "1": {
+                value: body,
+              },
+            },
+            textBody: [
+              {
+                partId: "1",
+              },
+            ],
           },
         },
+        destroy: [draftId], // Delete the old draft
       }, "0"]);
       methodCalls.push(["EmailSubmission/set", {
         accountId: this.accountId,
         create: {
           "1": {
-            emailId: draftId,
+            emailId: `#${newEmailId}`,
             identityId: identityId,
           },
         },
@@ -1112,7 +1142,7 @@ export class JMAPClient {
         accountId: this.accountId,
         create: {
           [emailId]: {
-            from: [{ email: fromEmail || this.username }],
+            from: [fromAddress],
             to: to.map(email => ({ email })),
             cc: cc?.map(email => ({ email })),
             bcc: bcc?.map(email => ({ email })),
