@@ -7,11 +7,13 @@ import { ArrowLeft, Settings as SettingsIcon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { AppearanceSettings } from '@/components/settings/appearance-settings';
 import { EmailSettings } from '@/components/settings/email-settings';
+import { EmailFiltersSettings } from '@/components/settings/email-filters-settings';
+import { EmailTemplatesSettings } from '@/components/settings/email-templates-settings';
 import { AccountSettings } from '@/components/settings/account-settings';
 import { AdvancedSettings } from '@/components/settings/advanced-settings';
 import { cn } from '@/lib/utils';
 
-type Tab = 'appearance' | 'email' | 'account' | 'advanced';
+type Tab = 'appearance' | 'email' | 'filters' | 'templates' | 'account' | 'advanced';
 
 export default function SettingsPage() {
   const router = useRouter();
@@ -21,6 +23,8 @@ export default function SettingsPage() {
   const tabs: { id: Tab; label: string }[] = [
     { id: 'appearance', label: t('tabs.appearance') },
     { id: 'email', label: t('tabs.email') },
+    { id: 'filters', label: t('tabs.filters') },
+    { id: 'templates', label: t('tabs.templates') },
     { id: 'account', label: t('tabs.account') },
     { id: 'advanced', label: t('tabs.advanced') },
   ];
@@ -78,6 +82,8 @@ export default function SettingsPage() {
           <div className="bg-card border border-border rounded-lg p-6">
             {activeTab === 'appearance' && <AppearanceSettings />}
             {activeTab === 'email' && <EmailSettings />}
+            {activeTab === 'filters' && <EmailFiltersSettings />}
+            {activeTab === 'templates' && <EmailTemplatesSettings />}
             {activeTab === 'account' && <AccountSettings />}
             {activeTab === 'advanced' && <AdvancedSettings />}
           </div>

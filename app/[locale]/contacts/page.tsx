@@ -10,7 +10,7 @@ import { ContactDetails } from '@/components/contacts/contact-details';
 import { ContactImportExport } from '@/components/contacts/contact-import-export';
 import { ContactGroups } from '@/components/contacts/contact-groups';
 import { GroupMembers } from '@/components/contacts/group-members';
-import { AlertCircle, ArrowLeft } from 'lucide-react';
+import { AlertCircle, ArrowLeft, RefreshCw } from 'lucide-react';
 import type { Contact } from '@/lib/jmap/types';
 
 export default function ContactsPage() {
@@ -31,19 +31,24 @@ export default function ContactsPage() {
     updateContact,
     deleteContact,
     clearError,
+    initializeSync,
+    syncContacts,
+    lastSyncTime,
+    supportsSync,
+    isSyncing,
   } = useContactsStore();
 
   const [selectedContact, setSelectedContactLocal] = useState<Contact | null>(null);
   const [showForm, setShowForm] = useState(false);
   const [showGroupMembers, setShowGroupMembers] = useState(false);
 
-  // Fetch contacts on mount
+  // Initialize sync and fetch contacts on mount
   useEffect(() => {
     if (client && isAuthenticated) {
-      console.log('Fetching contacts with client:', client);
-      void fetchContacts(client);
+      console.log('Initializing contacts sync with client:', client);
+      void initializeSync(client);
     } else {
-      console.log('Not fetching contacts. Client:', !!client, 'Authenticated:', isAuthenticated);
+      console.log('Not initializing sync. Client:', !!client, 'Authenticated:', isAuthenticated);
     }
   }, [client, isAuthenticated]);
 
@@ -132,7 +137,23 @@ export default function ContactsPage() {
             <ArrowLeft className="w-5 h-5" />
           </button>
           <h2 className="flex-1 font-semibold">{t('contacts.title')}</h2>
+          {supportsSync && (
+            <button
+              onClick={() => client && syncContacts(client)}
+              disabled={isSyncing}
+              className="p-1 hover:bg-muted rounded transition-colors disabled:opacity-50"
+              title={t('contacts.sync_contacts') || 'Sync contacts'}
+            >
+              <RefreshCw className={`w-4 h-4 ${isSyncing ? 'animate-spin' : ''}`} />
+            </button>
+          )}
         </div>
+
+        {supportsSync && lastSyncTime && (
+          <div className="px-4 py-2 text-xs text-muted-foreground border-b border-border">
+            {t('contacts.last_synced')}: {new Date(lastSyncTime).toLocaleTimeString()}
+          </div>
+        )}
         
         <div className="p-4 border-b border-border">
           <ContactImportExport contacts={contacts} />

@@ -3,10 +3,12 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useContactsStore } from '@/stores/contacts-store';
 import { Avatar } from '@/components/ui/avatar';
+import { Mail, Users } from 'lucide-react';
 import type { Contact } from '@/lib/jmap/types';
 
 interface EmailSuggestion extends Contact {
   primaryEmail?: string;
+  matchType?: 'name' | 'email';
 }
 
 interface ContactAutocompleteProps {
@@ -41,11 +43,17 @@ export function ContactAutocomplete({
     return text.trim();
   };
 
+  // Validate email format
+  const isValidEmail = (email: string) => {
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    return emailRegex.test(email);
+  };
+
   // Update suggestions based on input
   useEffect(() => {
     const searchQuery = getSearchQuery(value).toLowerCase();
 
-    if (!searchQuery) {
+    if (!searchQuery || searchQuery.length < 1) {
       setSuggestions([]);
       setIsOpen(false);
       setSelectedIndex(-1);
@@ -54,16 +62,23 @@ export function ContactAutocomplete({
 
     // Filter contacts that match the search query
     const filtered = contacts
-      .filter(contact =>
-        contact.name.toLowerCase().includes(searchQuery) ||
-        contact.emails.some(e => e.email.toLowerCase().includes(searchQuery))
-      )
-      .map(contact => ({
-        ...contact,
-        primaryEmail: contact.emails[0]?.email,
-      }))
+      .filter(contact => {
+        const nameMatch = contact.name.toLowerCase().includes(searchQuery);
+        const emailMatch = contact.emails.some(e => 
+          e.email.toLowerCase().includes(searchQuery)
+        );
+        return nameMatch || emailMatch;
+      })
+      .map(contact => {
+        const matchType = contact.name.toLowerCase().includes(searchQuery) ? ('name' as const) : ('email' as const);
+        return {
+          ...contact,
+          primaryEmail: contact.emails[0]?.email,
+          matchType,
+        };
+      })
       .filter(c => c.primaryEmail) // Only show contacts with at least one email
-      .slice(0, 5); // Limit to 5 suggestions
+      .slice(0, 8); // Increased limit to 8 suggestions
 
     setSuggestions(filtered);
     setIsOpen(filtered.length > 0);
@@ -112,8 +127,8 @@ export function ContactAutocomplete({
     const searchQuery = getSearchQuery(value);
     const beforeLastComma = value.slice(0, value.length - searchQuery.length);
 
-    // Build the new value with the selected email
-    const newValue = beforeLastComma + suggestion.primaryEmail;
+    // Build the new value with the selected email, ready for next entry
+    const newValue = beforeLastComma + suggestion.primaryEmail + ', ';
     onChange(newValue);
     onSelectEmail(suggestion.primaryEmail, suggestion.name);
 
@@ -138,16 +153,35 @@ export function ContactAutocomplete({
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
+  // Highlight matching text
+  const highlightMatch = (text: string, query: string) => {
+    if (!query) return text;
+    const regex = new RegExp(`(${query})`, 'gi');
+    const parts = text.split(regex);
+    return parts.map((part, i) =>
+      regex.test(part) ? (
+        <span key={i} className="font-semibold text-primary">
+          {part}
+        </span>
+      ) : (
+        part
+      )
+    );
+  };
+
+  const searchQuery = getSearchQuery(value).toLowerCase();
+
   return (
     <div className="relative flex-1">
       <input
         ref={inputRef}
-        type="email"
+        type="text"
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        placeholder={placeholder || 'To email...'}
+        placeholder={placeholder || 'Enter email addresses (comma separated)...'}
         className={`w-full px-3 py-2 border border-border rounded-md bg-background text-foreground placeholder-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary ${className || ''}`}
         autoComplete="off"
+        spellCheck="false"
       />
 
       {/* Autocomplete Suggestions */}
@@ -156,12 +190,12 @@ export function ContactAutocomplete({
           ref={suggestionsRef}
           className="absolute top-full left-0 right-0 mt-1 bg-popover border border-border rounded-md shadow-lg z-50"
         >
-          <div className="max-h-64 overflow-y-auto">
+          <div className="max-h-72 overflow-y-auto">
             {suggestions.map((suggestion, index) => (
               <button
                 key={suggestion.id}
                 onClick={() => handleSelectSuggestion(suggestion)}
-                className={`w-full px-4 py-2 text-left flex items-center gap-3 hover:bg-muted transition-colors ${
+                className={`w-full px-3 py-2 text-left flex items-center gap-2 hover:bg-muted transition-colors border-b border-border/50 last:border-0 ${
                   selectedIndex === index ? 'bg-muted' : ''
                 }`}
               >
@@ -172,15 +206,30 @@ export function ContactAutocomplete({
                 />
                 <div className="flex-1 min-w-0">
                   <div className="text-sm font-medium text-foreground truncate">
-                    {suggestion.name}
+                    {highlightMatch(suggestion.name, searchQuery)}
                   </div>
-                  <div className="text-xs text-muted-foreground truncate">
-                    {suggestion.primaryEmail}
+                  <div className="text-xs text-muted-foreground truncate flex items-center gap-1">
+                    <Mail className="w-3 h-3" />
+                    {highlightMatch(suggestion.primaryEmail || '', searchQuery)}
                   </div>
                 </div>
               </button>
             ))}
           </div>
+        </div>
+      )}
+
+      {/* No results message */}
+      {searchQuery && !isOpen && contacts.length > 0 && (
+        <div className="absolute top-full left-0 right-0 mt-1 bg-popover border border-border rounded-md shadow-lg z-50 p-3 text-center text-sm text-muted-foreground">
+          No contacts match "{searchQuery}"
+        </div>
+      )}
+
+      {/* No contacts message */}
+      {searchQuery && contacts.length === 0 && (
+        <div className="absolute top-full left-0 right-0 mt-1 bg-popover border border-border rounded-md shadow-lg z-50 p-3 text-center text-sm text-muted-foreground">
+          No contacts available. Add contacts to use autocomplete.
         </div>
       )}
     </div>

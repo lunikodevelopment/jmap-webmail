@@ -5,9 +5,11 @@ import { useTranslations } from "next-intl";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ContactAutocomplete } from "@/components/contacts/contact-autocomplete";
-import { X, Paperclip, Send, Save, Check, Loader2, AlertCircle } from "lucide-react";
+import { X, Paperclip, Send, Save, Check, Loader2, AlertCircle, Zap, ChevronDown } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuthStore } from "@/stores/auth-store";
+import { useTemplateStore } from "@/stores/template-store";
+import { substituteVariables } from "@/lib/template-types";
 
 interface EmailComposerProps {
   onSend?: (data: {
@@ -103,6 +105,12 @@ export function EmailComposer({
   const [selectedIdentityId, setSelectedIdentityId] = useState<string | null>(null);
 
   const { client, identities, primaryIdentity } = useAuthStore();
+  const { templates } = useTemplateStore();
+  
+  const [showTemplateMenu, setShowTemplateMenu] = useState(false);
+  const [showVariableForm, setShowVariableForm] = useState(false);
+  const [variableValues, setVariableValues] = useState<Record<string, string>>({});
+  const [selectedTemplate, setSelectedTemplate] = useState<string | null>(null);
 
   // Handle file selection
   const handleFileSelect = async (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -151,6 +159,44 @@ export function EmailComposer({
   // Remove attachment
   const removeAttachment = (index: number) => {
     setAttachments(prev => prev.filter((_, i) => i !== index));
+  };
+
+  // Apply template to composer
+  const applyTemplate = (templateId: string) => {
+    const template = templates.find(t => t.id === templateId);
+    if (!template) return;
+
+    // Find all variables used in the template
+    const allVariables = new Set(template.variables || []);
+    
+    // If template has variables, show form to fill them in
+    if (allVariables.size > 0) {
+      setSelectedTemplate(templateId);
+      setVariableValues({});
+      setShowVariableForm(true);
+      setShowTemplateMenu(false);
+    } else {
+      // No variables, just apply the template
+      setSubject(template.subject);
+      setBody(template.body);
+      setShowTemplateMenu(false);
+    }
+  };
+
+  // Insert template with variable substitution
+  const insertTemplateWithVariables = () => {
+    const template = templates.find(t => t.id === selectedTemplate);
+    if (!template) return;
+
+    // Substitute variables in template
+    const substitutedSubject = substituteVariables(template.subject, variableValues);
+    const substitutedBody = substituteVariables(template.body, variableValues);
+
+    setSubject(substitutedSubject);
+    setBody(substitutedBody);
+    setShowVariableForm(false);
+    setSelectedTemplate(null);
+    setVariableValues({});
   };
 
   // Auto-save draft functionality
@@ -338,9 +384,49 @@ export function EmailComposer({
             </div>
           )}
         </div>
-        <Button variant="ghost" size="icon" onClick={handleClose}>
-          <X className="w-4 h-4" />
-        </Button>
+        <div className="flex items-center gap-2">
+          {/* Template button */}
+          <div className="relative">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setShowTemplateMenu(!showTemplateMenu)}
+              className="gap-1"
+              title="Insert template"
+            >
+              <Zap className="w-4 h-4" />
+              {t('template')}
+              <ChevronDown className="w-3 h-3" />
+            </Button>
+            {showTemplateMenu && (
+              <div className="absolute right-0 mt-1 w-56 bg-card border border-border rounded-lg shadow-lg z-50">
+                {templates.length === 0 ? (
+                  <div className="p-3 text-xs text-muted-foreground text-center">
+                    {t('no_templates')}
+                  </div>
+                ) : (
+                  <div className="max-h-64 overflow-y-auto">
+                    {templates.map((template) => (
+                      <button
+                        key={template.id}
+                        onClick={() => applyTemplate(template.id)}
+                        className="w-full text-left px-3 py-2 hover:bg-muted transition-colors text-sm border-b border-border/50 last:border-0"
+                      >
+                        <div className="font-medium text-foreground truncate">{template.name}</div>
+                        {template.category && (
+                          <div className="text-xs text-muted-foreground">{template.category}</div>
+                        )}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+          <Button variant="ghost" size="icon" onClick={handleClose}>
+            <X className="w-4 h-4" />
+          </Button>
+        </div>
       </div>
 
       <div className="flex-1 flex flex-col">
@@ -437,6 +523,61 @@ export function EmailComposer({
             />
           </div>
         </div>
+
+        {/* Variable Substitution Form */}
+        {showVariableForm && selectedTemplate && (() => {
+          const template = templates.find(t => t.id === selectedTemplate);
+          const variables = template?.variables || [];
+          return (
+            <div className="px-4 py-3 border-b bg-secondary/50">
+              <div className="mb-3">
+                <h4 className="text-sm font-semibold text-foreground mb-2">
+                  {t('fill_template_variables')}
+                </h4>
+                <p className="text-xs text-muted-foreground mb-3">
+                  {t('fill_template_variables_description')}
+                </p>
+              </div>
+              <div className="space-y-2 mb-3">
+                {variables.map((variable) => (
+                  <div key={variable} className="flex items-center gap-2">
+                    <label className="text-xs text-foreground w-32 font-medium">
+                      {`{{${variable}}}`}
+                    </label>
+                    <Input
+                      type="text"
+                      placeholder={`Enter ${variable}...`}
+                      value={variableValues[variable] || ''}
+                      onChange={(e) =>
+                        setVariableValues(prev => ({ ...prev, [variable]: e.target.value }))
+                      }
+                      className="flex-1 text-sm"
+                    />
+                  </div>
+                ))}
+              </div>
+              <div className="flex gap-2 justify-end">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    setShowVariableForm(false);
+                    setSelectedTemplate(null);
+                    setVariableValues({});
+                  }}
+                >
+                  {t('cancel')}
+                </Button>
+                <Button
+                  size="sm"
+                  onClick={insertTemplateWithVariables}
+                >
+                  {t('insert_template')}
+                </Button>
+              </div>
+            </div>
+          );
+        })()}
 
         <div className="flex-1 px-4 py-3 min-h-0">
           <textarea

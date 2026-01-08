@@ -11,6 +11,11 @@ interface ContactsStore {
   error: string | null;
   searchQuery: string;
   selectedGroupId: string | null;
+  
+  // Sync state
+  lastSyncTime: number | null;
+  supportsSync: boolean;
+  isSyncing: boolean;
 
   // Contacts operations
   fetchContacts: (client: JMAPClient) => Promise<void>;
@@ -19,6 +24,12 @@ interface ContactsStore {
   updateContact: (client: JMAPClient, contactId: string, contact: Partial<Contact>) => Promise<void>;
   deleteContact: (client: JMAPClient, contactId: string) => Promise<void>;
   searchContacts: (query: string) => Contact[];
+
+  // Sync operations
+  initializeSync: (client: JMAPClient) => Promise<void>;
+  syncContacts: (client: JMAPClient) => Promise<void>;
+  handleContactChange: (contactIds: string[], client: JMAPClient) => Promise<void>;
+  removeDeletedContact: (contactId: string) => void;
 
   // Groups operations
   createGroup: (group: Omit<ContactGroup, 'id'>) => void;
@@ -44,6 +55,9 @@ export const useContactsStore = create<ContactsStore>()(
       error: null,
       searchQuery: '',
       selectedGroupId: null,
+      lastSyncTime: null,
+      supportsSync: false,
+      isSyncing: false,
 
       fetchContacts: async (client) => {
         set({ isLoading: true, error: null });
@@ -122,7 +136,78 @@ export const useContactsStore = create<ContactsStore>()(
           throw error;
         }
       },
+      initializeSync: async (client) => {
+        try {
+          // Check if server supports ContactCard
+          const capabilities = client.getCapabilities();
+          const supportsContacts = capabilities && 'urn:ietf:params:jmap:contacts' in capabilities;
+          set({ supportsSync: supportsContacts || false });
+          
+          if (supportsContacts) {
+            console.log('Server supports JMAP Contacts, initializing sync...');
+            await get().syncContacts(client);
+          }
+        } catch (error) {
+          console.error('Error initializing contacts sync:', error);
+        }
+      },
 
+      syncContacts: async (client) => {
+        if (!get().supportsSync) return;
+        
+        set({ isSyncing: true, error: null });
+        try {
+          const contacts = await client.getContacts();
+          set({
+            contacts,
+            isSyncing: false,
+            lastSyncTime: Date.now(),
+          });
+        } catch (error) {
+          console.error('Error syncing contacts:', error);
+          set({
+            isSyncing: false,
+            error: error instanceof Error ? error.message : 'Failed to sync contacts',
+          });
+        }
+      },
+
+      handleContactChange: async (contactIds, client) => {
+        try {
+          const updatedContacts: Contact[] = [];
+          
+          for (const contactId of contactIds) {
+            const contact = await client.getContact(contactId);
+            if (contact) {
+              updatedContacts.push(contact);
+            }
+          }
+          
+          set(state => {
+            const existingIds = new Set(state.contacts.map(c => c.id));
+            const newContacts = updatedContacts.filter(c => !existingIds.has(c.id));
+            const updatedExisting = state.contacts.map(c => {
+              const updated = updatedContacts.find(u => u.id === c.id);
+              return updated || c;
+            });
+            
+            return {
+              contacts: [...updatedExisting, ...newContacts],
+              lastSyncTime: Date.now(),
+            };
+          });
+        } catch (error) {
+          console.error('Error handling contact changes:', error);
+        }
+      },
+
+      removeDeletedContact: (contactId) => {
+        set(state => ({
+          contacts: state.contacts.filter(c => c.id !== contactId),
+          selectedContactId: state.selectedContactId === contactId ? null : state.selectedContactId,
+          lastSyncTime: Date.now(),
+        }));
+      },
       searchContacts: (query) => {
         if (!query.trim()) {
           return get().contacts;

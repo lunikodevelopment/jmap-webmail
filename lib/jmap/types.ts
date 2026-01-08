@@ -259,3 +259,84 @@ export interface ContactGroup {
   createdAt?: string;
   updatedAt?: string;
 }
+
+// Calendar Types (RFC 5545 / JMAP Calendars)
+export interface Calendar {
+  id: string;
+  name: string;
+  description?: string;
+  color?: string;
+  isSubscribed?: boolean;
+  isReadOnly?: boolean;
+  sortOrder?: number;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export type RecurrenceFrequency = 'DAILY' | 'WEEKLY' | 'MONTHLY' | 'YEARLY';
+export type EventStatus = 'tentative' | 'confirmed' | 'cancelled';
+export type EventTransparency = 'opaque' | 'transparent'; // opaque = busy, transparent = free
+
+export interface RecurrenceRule {
+  frequency: RecurrenceFrequency;
+  interval?: number;
+  count?: number;
+  until?: string; // ISO 8601 date
+  byDay?: string[]; // MO, TU, WE, etc.
+  byMonth?: number[]; // 1-12
+  byMonthDay?: number[];
+}
+
+export interface CalendarEventParticipant {
+  name?: string;
+  email: string;
+  status?: 'accepted' | 'declined' | 'tentative' | 'needs-action';
+  role?: 'chair' | 'req-participant' | 'opt-participant' | 'non-participant';
+}
+
+export interface CalendarEventAttachment {
+  filename?: string;
+  type?: string;
+  size?: number;
+  url?: string;
+  blobId?: string;
+}
+
+export interface CalendarEvent {
+  id: string;
+  calendarId: string;
+  title: string;
+  description?: string;
+  location?: string;
+  startTime: string; // ISO 8601
+  endTime: string; // ISO 8601
+  duration?: number; // seconds
+  isAllDay?: boolean;
+  timezone?: string;
+  
+  // Recurrence
+  recurrence?: RecurrenceRule;
+  recurrenceId?: string; // For event instances
+  isRecurring?: boolean;
+  
+  // Status and Visibility
+  status?: EventStatus;
+  transparency?: EventTransparency;
+  isPrivate?: boolean;
+  
+  // Organizer and Participants
+  organizer?: CalendarEventParticipant;
+  participants?: CalendarEventParticipant[];
+  
+  // Other
+  categories?: string[];
+  priority?: number; // 0-9
+  attachments?: CalendarEventAttachment[];
+  alarm?: {
+    action: 'display' | 'email' | 'procedure';
+    trigger: string; // ISO 8601 duration (e.g., "PT15M")
+  };
+  
+  createdAt?: string;
+  updatedAt?: string;
+}
