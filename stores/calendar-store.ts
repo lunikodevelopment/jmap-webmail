@@ -13,10 +13,15 @@ interface CalendarStore {
   error: string | null;
   
   // Filter state
-  viewMode: 'month' | 'week' | 'day';
+  viewMode: 'month' | 'week' | 'day' | 'agenda';
   selectedDate: Date;
   supportsCalendars: boolean;
   lastSyncTime: number | null;
+  
+  // Calendar visibility and selection
+  selectedCalendarIds: Set<string>;
+  visibleEvents: CalendarEvent[];
+  loadingEvents: boolean;
 
   // Calendar operations
   fetchCalendars: (client: JMAPClient) => Promise<void>;
@@ -40,8 +45,13 @@ interface CalendarStore {
   handleCalendarChange: (calendarIds: string[], client: JMAPClient) => Promise<void>;
 
   // View operations
-  setViewMode: (mode: 'month' | 'week' | 'day') => void;
+  setViewMode: (mode: 'month' | 'week' | 'day' | 'agenda') => void;
   setSelectedDate: (date: Date) => void;
+  
+  // Calendar visibility
+  toggleCalendarVisibility: (calendarId: string) => void;
+  setSelectedCalendars: (calendarIds: string[]) => void;
+  updateVisibleEvents: () => void;
 
   // UI state
   clearError: () => void;
@@ -61,13 +71,15 @@ export const useCalendarStore = create<CalendarStore>()(
       selectedDate: new Date(),
       supportsCalendars: false,
       lastSyncTime: null,
+      selectedCalendarIds: new Set<string>(),
+      visibleEvents: [],
+      loadingEvents: false,
 
       fetchCalendars: async (client) => {
         set({ isLoading: true, error: null });
         try {
-          // This would use client.getCalendars() if implemented in JMAP client
-          // For now, we'll set empty array until JMAP client supports it
-          set({ calendars: [], isLoading: false });
+          const calendars = await client.getCalendars();
+          set({ calendars, isLoading: false });
         } catch (error) {
           console.error("Error fetching calendars:", error);
           set({
@@ -80,9 +92,19 @@ export const useCalendarStore = create<CalendarStore>()(
       createCalendar: async (client, calendar) => {
         set({ isLoading: true, error: null });
         try {
-          // This would use client.createCalendar() if implemented
-          console.log("Creating calendar:", calendar);
-          set({ isLoading: false });
+          const calendarId = await client.createCalendar(
+            calendar.name,
+            calendar.description,
+            calendar.color
+          );
+          const newCalendar: Calendar = {
+            id: calendarId,
+            ...calendar,
+          };
+          set((state) => ({
+            calendars: [...state.calendars, newCalendar],
+            isLoading: false,
+          }));
         } catch (error) {
           set({
             error: error instanceof Error ? error.message : "Failed to create calendar",
@@ -95,7 +117,7 @@ export const useCalendarStore = create<CalendarStore>()(
       updateCalendar: async (client, calendarId, updates) => {
         set({ isLoading: true, error: null });
         try {
-          // This would use client.updateCalendar()
+          await client.updateCalendar(calendarId, updates);
           set((state) => ({
             calendars: state.calendars.map((c) =>
               c.id === calendarId ? { ...c, ...updates } : c
@@ -114,7 +136,7 @@ export const useCalendarStore = create<CalendarStore>()(
       deleteCalendar: async (client, calendarId) => {
         set({ isLoading: true, error: null });
         try {
-          // This would use client.deleteCalendar()
+          await client.deleteCalendar(calendarId);
           set((state) => ({
             calendars: state.calendars.filter((c) => c.id !== calendarId),
             selectedCalendarId:
@@ -139,8 +161,13 @@ export const useCalendarStore = create<CalendarStore>()(
       fetchEvents: async (client, calendarId) => {
         set({ isLoading: true, error: null });
         try {
-          // This would use client.getCalendarEvents()
-          set({ events: [], isLoading: false });
+          const targetCalendarId = calendarId || get().selectedCalendarId;
+          if (!targetCalendarId) {
+            set({ events: [], isLoading: false });
+            return;
+          }
+          const { events } = await client.getCalendarEvents(targetCalendarId);
+          set({ events, isLoading: false });
         } catch (error) {
           console.error("Error fetching events:", error);
           set({
@@ -179,16 +206,30 @@ export const useCalendarStore = create<CalendarStore>()(
       createEvent: async (client, event) => {
         set({ isLoading: true, error: null });
         try {
-          // This would use client.createCalendarEvent()
+          const calendarId = event.calendarId || get().selectedCalendarId;
+          if (!calendarId) {
+            throw new Error('No calendar selected');
+          }
+          
+          // Ensure dates are ISO strings
+          const eventToCreate = {
+            ...event,
+            startTime: typeof event.startTime === 'string' ? event.startTime : new Date(event.startTime).toISOString(),
+            endTime: typeof event.endTime === 'string' ? event.endTime : new Date(event.endTime).toISOString(),
+          };
+          
+          const eventId = await client.createCalendarEvent(calendarId, eventToCreate);
           const newEvent: CalendarEvent = {
-            id: `event_${Date.now()}`,
+            id: eventId,
             ...event,
           };
           set((state) => ({
             events: [...state.events, newEvent],
             isLoading: false,
           }));
+          console.log('Event created successfully:', newEvent);
         } catch (error) {
+          console.error('Error creating event:', error);
           set({
             error: error instanceof Error ? error.message : "Failed to create event",
             isLoading: false,
@@ -200,7 +241,7 @@ export const useCalendarStore = create<CalendarStore>()(
       updateEvent: async (client, eventId, updates) => {
         set({ isLoading: true, error: null });
         try {
-          // This would use client.updateCalendarEvent()
+          await client.updateCalendarEvent(eventId, updates);
           set((state) => ({
             events: state.events.map((e) =>
               e.id === eventId ? { ...e, ...updates } : e
@@ -219,7 +260,7 @@ export const useCalendarStore = create<CalendarStore>()(
       deleteEvent: async (client, eventId) => {
         set({ isLoading: true, error: null });
         try {
-          // This would use client.deleteCalendarEvent()
+          await client.deleteCalendarEvent(eventId);
           set((state) => ({
             events: state.events.filter((e) => e.id !== eventId),
             selectedEventId:
@@ -256,15 +297,64 @@ export const useCalendarStore = create<CalendarStore>()(
       },
 
       syncCalendars: async (client) => {
-        if (!get().supportsCalendars) return;
+        if (!get().supportsCalendars) {
+          console.log('Calendar sync skipped: server does not support calendars');
+          return;
+        }
 
         set({ isSyncing: true, error: null });
         try {
-          // This would call client.getCalendars() and client.getCalendarEvents()
+          // Fetch all calendars
+          console.log('Starting calendar sync...');
+          const calendars = await client.getCalendars();
+          console.log('Fetched calendars:', calendars);
+          
+          if (!calendars || calendars.length === 0) {
+            console.log('No calendars found on server');
+            set({
+              calendars: [],
+              events: [],
+              isSyncing: false,
+              lastSyncTime: Date.now(),
+            });
+            return;
+          }
+          
+          // Fetch events for each calendar
+          let allEvents: CalendarEvent[] = [];
+          for (const calendar of calendars) {
+            try {
+              console.log(`Fetching events for calendar: ${calendar.id} (${calendar.name})`);
+              const { events, total } = await client.getCalendarEvents(calendar.id);
+              console.log(`Fetched ${events.length} events for calendar ${calendar.id} (total: ${total})`);
+              allEvents = [...allEvents, ...events];
+            } catch (error) {
+              console.error(`Failed to fetch events for calendar ${calendar.id}:`, error);
+              // Continue with other calendars even if one fails
+            }
+          }
+          
+          console.log(`Calendar sync: setting ${allEvents.length} total events`);
           set({
+            calendars,
+            events: allEvents,
             isSyncing: false,
             lastSyncTime: Date.now(),
           });
+          
+          // Auto-select all calendars on first sync
+          if (get().selectedCalendarIds.size === 0 && calendars.length > 0) {
+            const calendarIds = calendars.map(c => c.id);
+            console.log('Auto-selecting all calendars on first sync:', calendarIds);
+            set({ selectedCalendarIds: new Set(calendarIds) });
+            get().updateVisibleEvents();
+          } else {
+            // Update visible events
+            console.log('Updating visible events...');
+            get().updateVisibleEvents();
+          }
+          
+          console.log(`Calendar sync complete: ${calendars.length} calendars, ${allEvents.length} events`);
         } catch (error) {
           console.error("Error syncing calendars:", error);
           set({
@@ -276,8 +366,29 @@ export const useCalendarStore = create<CalendarStore>()(
 
       handleCalendarChange: async (calendarIds, client) => {
         try {
-          // This would fetch updated calendars/events
+          // Fetch updated calendars and events for changed calendars
           console.log("Calendar change detected:", calendarIds);
+          
+          const updatedCalendars = await Promise.all(
+            calendarIds.map(id => client.getCalendar(id))
+          );
+          
+          let updatedEvents: CalendarEvent[] = [];
+          for (const calendarId of calendarIds) {
+            const { events } = await client.getCalendarEvents(calendarId);
+            updatedEvents = [...updatedEvents, ...events];
+          }
+          
+          set((state) => ({
+            calendars: state.calendars.map(c => {
+              const updated = updatedCalendars.find(u => u?.id === c.id);
+              return updated || c;
+            }),
+            events: [
+              ...state.events.filter(e => !calendarIds.includes(e.calendarId)),
+              ...updatedEvents,
+            ],
+          }));
         } catch (error) {
           console.error("Error handling calendar changes:", error);
         }
@@ -288,7 +399,36 @@ export const useCalendarStore = create<CalendarStore>()(
       },
 
       setSelectedDate: (date) => {
-        set({ selectedDate: date });
+        set({ selectedDate: date instanceof Date ? date : new Date(date) });
+      },
+
+      toggleCalendarVisibility: (calendarId) => {
+        set((state) => {
+          const newSelectedIds = new Set(state.selectedCalendarIds);
+          if (newSelectedIds.has(calendarId)) {
+            newSelectedIds.delete(calendarId);
+          } else {
+            newSelectedIds.add(calendarId);
+          }
+          return { selectedCalendarIds: newSelectedIds };
+        });
+        get().updateVisibleEvents();
+      },
+
+      setSelectedCalendars: (calendarIds) => {
+        set({ selectedCalendarIds: new Set(calendarIds) });
+        get().updateVisibleEvents();
+      },
+
+      updateVisibleEvents: () => {
+        const state = get();
+        const visible = state.selectedCalendarIds.size === 0
+          ? state.events
+          : state.events.filter((event) =>
+              state.selectedCalendarIds.has(event.calendarId)
+            );
+        console.log(`Updated visible events: ${visible.length} of ${state.events.length} total from ${state.selectedCalendarIds.size} selected calendars`);
+        set({ visibleEvents: visible });
       },
 
       clearError: () => {

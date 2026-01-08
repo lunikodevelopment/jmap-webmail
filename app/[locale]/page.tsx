@@ -782,8 +782,8 @@ export default function Home() {
               "md:flex-1 md:relative"
             )}
           >
-            {/* Mobile Conversation View - shown when thread is selected on mobile */}
-            {isMobile && conversationThread ? (
+            {/* Conversation View - shown when thread is selected */}
+            {conversationThread ? (
               <ThreadConversationView
                 thread={conversationThread}
                 emails={conversationEmails}

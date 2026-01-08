@@ -4,6 +4,7 @@ import { formatDate } from "@/lib/utils";
 import { Email } from "@/lib/jmap/types";
 import { cn } from "@/lib/utils";
 import { Avatar } from "@/components/ui/avatar";
+import { Favicon } from "@/components/favicon";
 import { Paperclip, Star, Circle, CheckSquare, Square } from "lucide-react";
 import { useEmailStore } from "@/stores/email-store";
 import { useSettingsStore } from "@/stores/settings-store";
@@ -48,6 +49,9 @@ export function EmailListItem({ email, selected, onClick, onContextMenu }: Email
   const sender = email.from?.[0];
   const colorTag = getEmailColor(email.keywords);
 
+  // Debug logging - always log
+  console.log('[EmailListItem] Rendering email:', email.id, 'sender:', sender?.email || 'NO_EMAIL', 'sender obj:', sender);
+
   // Drag and drop functionality
   const { dragHandlers, isDragging } = useEmailDrag({
     email,
@@ -87,9 +91,9 @@ export function EmailListItem({ email, selected, onClick, onContextMenu }: Email
       onContextMenu={handleContextMenu}
       style={{ minHeight: 'var(--list-item-height)' }}
     >
-      <div className="flex items-start gap-3 px-4" style={{
-        paddingTop: 'calc((var(--list-item-height) - 40px) / 2)',
-        paddingBottom: 'calc((var(--list-item-height) - 40px) / 2)'
+      <div className="flex items-start gap-2 sm:gap-3 px-3 sm:px-4" style={{
+        paddingTop: 'calc((var(--list-item-height) - 36px) / 2)',
+        paddingBottom: 'calc((var(--list-item-height) - 36px) / 2)'
       }}>
         {/* Checkbox with smooth animation */}
         <button
@@ -115,13 +119,25 @@ export function EmailListItem({ email, selected, onClick, onContextMenu }: Email
           </div>
         )}
 
-        {/* Avatar */}
-        <Avatar
-          name={sender?.name}
-          email={sender?.email}
-          size="md"
-          className="flex-shrink-0 shadow-sm"
-        />
+        {/* Avatar with Favicon overlay */}
+        <div className="relative flex-shrink-0 w-9 h-9 sm:w-10 sm:h-10">
+          <Avatar
+            name={sender?.name}
+            email={sender?.email}
+            size="md"
+            className="flex-shrink-0 shadow-sm w-full h-full"
+          />
+          {/* Favicon overlay in bottom-right corner */}
+          {sender?.email && (
+            <div className="absolute bottom-0 right-0 w-3.5 h-3.5 sm:w-4 sm:h-4 bg-background rounded-full border border-border shadow-sm overflow-hidden">
+              <Favicon
+                email={sender.email}
+                size="sm"
+                className="w-full h-full"
+              />
+            </div>
+          )}
+        </div>
 
         {/* Content */}
         <div className="flex-1 min-w-0">

@@ -98,12 +98,30 @@ This document tracks the development status and planned features for JMAP Webmai
 - [x] Email filters and rules
 - [x] Calendar integration (JMAP Calendars)
 - [x] Email templates
-- [ ] Signature management
-- [ ] Vacation responder settings
-- [ ] Email aliases support
-- [ ] Advanced search with filters
-- [ ] Email encryption (PGP/GPG)
-
+- [x] Signature management
+- [x] Vacation responder settings
+- [x] Email aliases support
+  - [x] Alias creation with custom naming conventions
+  - [x] Selective alias activation/deactivation
+  - [x] Alias-specific forwarding rules
+  - [x] Recipient visibility controls (mask primary email)
+  - [x] Integration with existing email systems
+  - [x] Administrative tools for monitoring alias usage
+  - [x] Organizational email policy enforcement
+  - [x] Audit logging for all alias operations
+  - [x] Usage statistics and analytics
+  - [x] Import/export functionality
+- [x] Advanced search with filters
+- [x] Email encryption (PGP/GPG)
+- [x] Email scheduling
+- [x] Email tracking
+- [x] Email forwarding to external addresses
+- [x] Email forwarding to other accounts
+- [x] Favicon Fetching
+- [ ] Multiple accounts login
+- [ ] Service Workers for PWA
+- [x] Remember Me Function
+- [ ] Calendar Invites
 ### Performance Optimizations
 - [ ] Virtual scrolling for large lists
 - [ ] Email content caching

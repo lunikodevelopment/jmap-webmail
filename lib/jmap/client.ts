@@ -1,4 +1,4 @@
-import type { Email, Mailbox, StateChange, AccountStates, Thread, Identity, Contact, ContactGroup } from "./types";
+import type { Email, Mailbox, StateChange, AccountStates, Thread, Identity, Contact, ContactGroup, Calendar, CalendarEvent } from "./types";
 
 // JMAP protocol types - these are intentionally flexible due to server variations
 interface JMAPSession {
@@ -166,6 +166,109 @@ export class JMAPClient {
     }
   }
 
+  // Get account ID for a specific JMAP capability
+  private getAccountIdForCapability(capability: string): string | null {
+    // First check primary accounts
+    const primaryAccount = this.session?.primaryAccounts?.[capability];
+    if (primaryAccount) {
+      return primaryAccount;
+    }
+
+    // Then check all accounts for this capability
+    if (this.accounts && typeof this.accounts === 'object') {
+      for (const [accountId, accountData] of Object.entries(this.accounts)) {
+        const accountCapabilities = (accountData as any)?.accountCapabilities || (accountData as any)?.capabilities;
+        if (accountCapabilities?.[capability]) {
+          return accountId;
+        }
+      }
+    }
+
+    // Fallback to main account ID
+    return this.accountId || null;
+  }
+
+  // Helper methods for event data mapping
+  private mapJMAPEventToCalendarEvent(jmapEvent: any, requestedCalendarId?: string): CalendarEvent {
+    try {
+      // Map JMAP properties to our CalendarEvent interface
+      // JMAP uses 'start'/'end', we use 'startTime'/'endTime'
+      // JMAP uses 'timeZone', we use 'timezone'
+      
+      // Handle calendarId - could be single value or calendarIds object
+      let calendarId = jmapEvent.calendarId;
+      if (!calendarId && jmapEvent.calendarIds && typeof jmapEvent.calendarIds === 'object' && !Array.isArray(jmapEvent.calendarIds)) {
+        // Extract first calendar ID from calendarIds object
+        const calendarIds = Object.keys(jmapEvent.calendarIds).filter(key => jmapEvent.calendarIds[key] === true);
+        calendarId = calendarIds[0] || requestedCalendarId || 'unknown';
+      }
+      
+      // Calculate end time from start + duration if end is missing
+      let endTime = jmapEvent.end || jmapEvent.endTime;
+      if (!endTime && jmapEvent.start && jmapEvent.duration) {
+        // Parse ISO 8601 duration and add to start
+        const durationSeconds = this.durationToSeconds(jmapEvent.duration);
+        const startDate = new Date(jmapEvent.start);
+        endTime = new Date(startDate.getTime() + durationSeconds * 1000).toISOString();
+      }
+      
+      const mappedEvent: CalendarEvent = {
+        id: jmapEvent.id,
+        calendarId: calendarId || requestedCalendarId || 'unknown',
+        title: jmapEvent.title || '',
+        description: jmapEvent.description,
+        location: jmapEvent.location,
+        // Handle both JMAP format (start/end) and our format (startTime/endTime)
+        startTime: jmapEvent.start || jmapEvent.startTime,
+        endTime: endTime,
+        duration: jmapEvent.duration ? this.durationToSeconds(jmapEvent.duration) : undefined,
+        isAllDay: jmapEvent.showWithoutTime,
+        timezone: jmapEvent.timeZone || jmapEvent.timezone,
+        recurrence: jmapEvent.recurrenceRules?.[0] || jmapEvent.recurrence,
+        recurrenceId: jmapEvent.recurrenceId,
+        status: jmapEvent.status,
+        transparency: jmapEvent.showAsFree ? 'transparent' : 'opaque',
+        isPrivate: jmapEvent.isPrivate,
+        organizer: jmapEvent.organizer,
+        participants: jmapEvent.participants,
+        categories: jmapEvent.categories,
+        priority: jmapEvent.priority,
+        attachments: jmapEvent.attachments,
+        alarm: jmapEvent.alarm,
+        createdAt: jmapEvent.created,
+        updatedAt: jmapEvent.updated,
+      };
+      return mappedEvent;
+    } catch (error) {
+      console.error('[JMAP] Error mapping JMAP event:', jmapEvent, error);
+      // Return minimal event to prevent crashes
+      return {
+        id: jmapEvent.id || 'unknown',
+        calendarId: requestedCalendarId || jmapEvent.calendarId || 'unknown',
+        title: jmapEvent.title || 'Untitled Event',
+        startTime: jmapEvent.start || jmapEvent.startTime || new Date().toISOString(),
+        endTime: jmapEvent.end || jmapEvent.endTime || new Date(Date.now() + 3600000).toISOString(),
+      };
+    }
+  }
+
+  private durationToSeconds(duration: string): number {
+    try {
+      // Parse ISO 8601 duration (e.g., "PT1H30M")
+      const match = duration.match(/PT(\d+H)?(\d+M)?(\d+S)?/);
+      if (!match) return 0;
+      
+      const hours = match[1] ? parseInt(match[1]) : 0;
+      const minutes = match[2] ? parseInt(match[2]) : 0;
+      const seconds = match[3] ? parseInt(match[3]) : 0;
+      
+      return hours * 3600 + minutes * 60 + seconds;
+    } catch (error) {
+      console.error('Error parsing duration:', duration, error);
+      return 0;
+    }
+  }
+
   async ping(): Promise<void> {
     if (!this.apiUrl) {
       throw new Error('Not connected');
@@ -204,7 +307,7 @@ export class JMAPClient {
     }
 
     const requestBody = {
-      using: ["urn:ietf:params:jmap:core", "urn:ietf:params:jmap:mail"],
+      using: ["urn:ietf:params:jmap:core", "urn:ietf:params:jmap:mail", "urn:ietf:params:jmap:calendars"],
       methodCalls: methodCalls,
     };
 
@@ -414,6 +517,88 @@ export class JMAPClient {
       // Fallback to primary account mailboxes
       return this.getMailboxes();
     }
+  }
+
+  /**
+   * Get the raw message content (RFC822 source) as a string
+   */
+  async getRawEmail(emailId: string, accountId?: string): Promise<string> {
+    const targetAccountId = accountId || this.accountId;
+    
+    if (!this.downloadUrl) {
+      throw new Error('Download URL not available. Please reconnect.');
+    }
+
+    // IMPORTANT: In JMAP, emailId is NOT the same as blobId. 
+    // We must first fetch the blobId for this email.
+    const response = await this.request([
+      ["Email/get", {
+        accountId: targetAccountId,
+        ids: [emailId],
+        properties: ["blobId"]
+      }, "0"],
+    ]);
+
+    const email = response.methodResponses?.[0]?.[1]?.list?.[0];
+    if (!email || !email.blobId) {
+      throw new Error("Blob ID not found for email " + emailId);
+    }
+
+    let url = this.downloadUrl;
+    url = url.replace('{accountId}', encodeURIComponent(targetAccountId));
+    url = url.replace('{blobId}', encodeURIComponent(email.blobId));
+    url = url.replace('{name}', encodeURIComponent('message.eml'));
+    url = url.replace('{type}', encodeURIComponent('message/rfc822'));
+    
+    const fetchResponse = await fetch(url, {
+      headers: {
+        'Authorization': this.authHeader,
+      },
+    });
+
+    if (!fetchResponse.ok) {
+      throw new Error(`Failed to fetch raw email: ${fetchResponse.status}`);
+    }
+
+    return await fetchResponse.text();
+  }
+
+  /**
+   * Get all headers for an email, with improved format for raw header viewing
+   */
+  async getEmailHeaders(emailId: string, accountId?: string): Promise<Record<string, string | string[]>> {
+    const targetAccountId = accountId || this.accountId;
+
+    const response = await this.request([
+      ["Email/get", {
+        accountId: targetAccountId,
+        ids: [emailId],
+        properties: ["headers"]
+      }, "0"],
+    ]);
+
+    if (response.methodResponses?.[0]?.[0] === "Email/get") {
+      const email = response.methodResponses[0][1].list?.[0];
+      if (email && email.headers) {
+        const headersRecord: Record<string, string | string[]> = {};
+        (email.headers as JMAPEmailHeader[]).forEach((header) => {
+          if (header && header.name) {
+            if (headersRecord[header.name]) {
+              if (Array.isArray(headersRecord[header.name])) {
+                (headersRecord[header.name] as string[]).push(header.value);
+              } else {
+                headersRecord[header.name] = [headersRecord[header.name] as string, header.value];
+              }
+            } else {
+              headersRecord[header.name] = header.value;
+            }
+          }
+        });
+        return headersRecord;
+      }
+    }
+    
+    return {};
   }
 
   async getEmails(mailboxId?: string, accountId?: string, limit: number = 50, position: number = 0): Promise<{ emails: Email[], hasMore: boolean, total: number }> {
@@ -866,6 +1051,7 @@ export class JMAPClient {
             "subject",
             "preview",
             "hasAttachment",
+            "blobId",
           ],
         }, "0"],
       ]);
@@ -1192,7 +1378,149 @@ export class JMAPClient {
         }
       }
     }
+
+    // Auto-collect recipients to "Auto collected" address book
+    try {
+      const allRecipients = [
+        ...to.map(email => ({ email, name: '' })),
+        ...(cc?.map(email => ({ email, name: '' })) || []),
+      ];
+
+      if (allRecipients.length > 0) {
+        await this.addAutoCollectedContacts(allRecipients);
+      }
+    } catch (error) {
+      // Don't throw error if auto-collection fails - it's not critical
+      console.error('Failed to auto-collect contacts:', error);
+    }
   }
+
+  private async addAutoCollectedContacts(recipients: Array<{ email: string; name: string }>) {
+    try {
+      // Query for address books
+      const abResponse = await this.request([
+        ["AddressBook/query", {
+          accountId: this.accountId
+        }, "0"]
+      ]);
+
+      const abQueryResponse = abResponse.methodResponses?.find((m: any) => m[0] === "AddressBook/query");
+      const addressBookIds = abQueryResponse?.[1]?.ids || [];
+
+      // Get address book details
+      let autoCollectedBook = null;
+      if (addressBookIds.length > 0) {
+        const abGetResponse = await this.request([
+          ["AddressBook/get", {
+            accountId: this.accountId,
+            ids: addressBookIds
+          }, "0"]
+        ]);
+
+        const abGetResult = abGetResponse.methodResponses?.find((m: any) => m[0] === "AddressBook/get");
+        const books = abGetResult?.[1]?.list || [];
+        autoCollectedBook = books.find((book: any) => book.name === 'Auto collected');
+      }
+
+      if (!autoCollectedBook) {
+        // Create the address book
+        const createResponse = await this.request([
+          ["AddressBook/set", {
+            accountId: this.accountId,
+            create: {
+              "auto-collected": {
+                name: "Auto collected",
+                description: "Automatically collected contacts from sent emails"
+              }
+            }
+          }, "0"]
+        ]);
+
+        const setResponse = createResponse.methodResponses?.find((m: any) => m[0] === "AddressBook/set");
+        if (setResponse?.[1]?.created?.["auto-collected"]) {
+          autoCollectedBook = {
+            id: setResponse[1].created["auto-collected"].id,
+            name: "Auto collected",
+            description: "Automatically collected contacts from sent emails"
+          };
+        } else {
+          console.warn('Failed to create Auto collected address book');
+          return;
+        }
+      }
+
+      // Get existing contacts in the address book to avoid duplicates
+      const existingContacts = await this.getAddressBookContacts(autoCollectedBook.id);
+      const existingEmails = new Set(existingContacts.map((c: any) => c.emails?.[0]?.value.toLowerCase()));
+
+      // Add new recipients that don't already exist
+      const newContacts: { [key: string]: any } = {};
+      let contactIndex = 0;
+
+      for (const recipient of recipients) {
+        if (!existingEmails.has(recipient.email.toLowerCase())) {
+          newContacts[`new-${contactIndex}`] = {
+            kind: "individual",
+            name: recipient.name || recipient.email,
+            emails: [
+              {
+                type: "personal",
+                value: recipient.email
+              }
+            ]
+          };
+          contactIndex++;
+        }
+      }
+
+      if (contactIndex > 0) {
+        await this.request([
+          ["ContactCard/set", {
+            accountId: this.accountId,
+            create: {
+              ...newContacts
+            },
+            onContactGroupIds: [autoCollectedBook.id]
+          }, "0"]
+        ]);
+        console.log(`Added ${contactIndex} new auto-collected contacts`);
+      }
+    } catch (error) {
+      console.error('Error in addAutoCollectedContacts:', error);
+    }
+  }
+
+  private async getAddressBookContacts(addressBookId: string) {
+    try {
+      const response = await this.request([
+        ["ContactCard/query", {
+          accountId: this.accountId,
+          filter: {
+            inContactGroup: addressBookId
+          }
+        }, "0"]
+      ]);
+
+      const queryResponse = response.methodResponses?.find((m: any) => m[0] === "ContactCard/query");
+      const contactIds = queryResponse?.[1]?.ids || [];
+
+      if (contactIds.length === 0) return [];
+
+      const getResponse = await this.request([
+        ["ContactCard/get", {
+          accountId: this.accountId,
+          ids: contactIds
+        }, "0"]
+      ]);
+
+      const getResult = getResponse.methodResponses?.find((m: any) => m[0] === "ContactCard/get");
+      return getResult?.[1]?.list || [];
+    } catch (error) {
+      console.error('Error getting address book contacts:', error);
+      return [];
+    }
+  }
+
 
   async uploadBlob(file: File): Promise<{ blobId: string; size: number; type: string }> {
     if (!this.session) {
@@ -1772,5 +2100,1087 @@ export class JMAPClient {
     }
 
     return card;
+  }
+
+  // Email Alias Management Methods
+  // These methods manage email aliases for the account
+
+  async getAliases(): Promise<any[]> {
+    try {
+      // Note: This assumes the server supports a custom "Alias/get" method
+      // or uses Identity objects to represent aliases
+      // Stalwart Mail Server may use Identity objects for this purpose
+      const response = await this.request([
+        ["Identity/get", {
+          accountId: this.accountId,
+        }, "0"]
+      ]);
+
+      if (response.methodResponses?.[0]?.[0] === "Identity/get") {
+        const identities = response.methodResponses[0][1].list || [];
+        // Filter to get only aliases (non-primary identities)
+        return identities.filter((identity: any) => !identity.isPrimary);
+      }
+
+      return [];
+    } catch (error) {
+      console.error('Failed to get aliases:', error);
+      return [];
+    }
+  }
+
+  async createAlias(email: string, displayName?: string): Promise<string> {
+    try {
+      // Create a new identity as an alias
+      const aliasId = `alias-${Date.now()}`;
+      
+      const response = await this.request([
+        ["Identity/set", {
+          accountId: this.accountId,
+          create: {
+            [aliasId]: {
+              email: email,
+              name: displayName || email.split('@')[0],
+              mayDelete: true,
+            },
+          },
+        }, "0"]
+      ]);
+
+      if (response.methodResponses?.[0]?.[0] === "Identity/set") {
+        const result = response.methodResponses[0][1];
+        if (result.created?.[aliasId]) {
+          return result.created[aliasId].id;
+        }
+      }
+
+      throw new Error('Failed to create alias');
+    } catch (error) {
+      console.error('Failed to create alias:', error);
+      throw error;
+    }
+  }
+
+  async updateAlias(aliasId: string, updates: { email?: string; name?: string }): Promise<void> {
+    try {
+      await this.request([
+        ["Identity/set", {
+          accountId: this.accountId,
+          update: {
+            [aliasId]: updates,
+          },
+        }, "0"]
+      ]);
+    } catch (error) {
+      console.error('Failed to update alias:', error);
+      throw error;
+    }
+  }
+
+  async deleteAlias(aliasId: string): Promise<void> {
+    try {
+      await this.request([
+        ["Identity/set", {
+          accountId: this.accountId,
+          destroy: [aliasId],
+        }, "0"]
+      ]);
+    } catch (error) {
+      console.error('Failed to delete alias:', error);
+      throw error;
+    }
+  }
+
+  async setAliasForwarding(aliasId: string, forwardTo: string[]): Promise<void> {
+    try {
+      // This would require server-side support for forwarding rules
+      // Implementation depends on server capabilities
+      await this.request([
+        ["Identity/set", {
+          accountId: this.accountId,
+          update: {
+            [aliasId]: {
+              bcc: forwardTo.map(email => ({ email })),
+            },
+          },
+        }, "0"]
+      ]);
+    } catch (error) {
+      console.error('Failed to set alias forwarding:', error);
+      throw error;
+    }
+  }
+
+  async getAliasUsageStats(aliasId: string): Promise<{ sent: number; received: number } | null> {
+    try {
+      // Query emails sent from and received on the alias
+      const sentResponse = await this.request([
+        ["Email/query", {
+          accountId: this.accountId,
+          filter: {
+            from: { email: aliasId },
+          },
+        }, "0"]
+      ]);
+
+      const receivedResponse = await this.request([
+        ["Email/query", {
+          accountId: this.accountId,
+          filter: {
+            to: { email: aliasId },
+          },
+        }, "1"]
+      ]);
+
+      const sent = sentResponse.methodResponses?.[0]?.[1]?.total || 0;
+      const received = receivedResponse.methodResponses?.[1]?.[1]?.total || 0;
+
+      return { sent, received };
+    } catch (error) {
+      console.error('Failed to get alias usage stats:', error);
+      return null;
+    }
+  }
+
+  async validateAliasEmail(email: string): Promise<boolean> {
+    try {
+      // Check if email format is valid
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (!emailRegex.test(email)) {
+        return false;
+      }
+
+      // Check if alias already exists
+      const aliases = await this.getAliases();
+      const exists = aliases.some((alias: any) => alias.email === email);
+      
+      return !exists;
+    } catch (error) {
+      console.error('Failed to validate alias email:', error);
+      return false;
+    }
+  }
+
+  async getAliasCapabilities(): Promise<{
+    supportsAliases: boolean;
+    maxAliasesPerAccount?: number;
+    supportsForwarding: boolean;
+    supportsVisibility: boolean;
+  }> {
+    try {
+      // Check server capabilities for alias support
+      const capabilities = this.getCapabilities();
+      
+      return {
+        supportsAliases: this.hasCapability("urn:ietf:params:jmap:mail"),
+        supportsForwarding: this.hasCapability("urn:ietf:params:jmap:mail"),
+        supportsVisibility: true, // Can be controlled via display name
+      };
+    } catch (error) {
+      console.error('Failed to get alias capabilities:', error);
+      return {
+        supportsAliases: false,
+        supportsForwarding: false,
+        supportsVisibility: false,
+      };
+    }
+  }
+
+  // Calendar methods (RFC 8984 - JMAP Calendars)
+  async getCalendars(): Promise<Calendar[]> {
+    try {
+      const response = await this.request([
+        ["Calendar/get", {
+          accountId: this.accountId,
+        }, "0"]
+      ]);
+
+      if (response.methodResponses?.[0]?.[0] === "Calendar/get") {
+        const calendars = (response.methodResponses[0][1].list || []) as Calendar[];
+        return calendars;
+      }
+
+      return [];
+    } catch (error) {
+      console.error('Failed to get calendars:', error);
+      return [];
+    }
+  }
+
+  async getCalendar(calendarId: string): Promise<Calendar | null> {
+    try {
+      const response = await this.request([
+        ["Calendar/get", {
+          accountId: this.accountId,
+          ids: [calendarId],
+        }, "0"]
+      ]);
+
+      if (response.methodResponses?.[0]?.[0] === "Calendar/get") {
+        const calendars = response.methodResponses[0][1].list || [];
+        return calendars[0] || null;
+      }
+
+      return null;
+    } catch (error) {
+      console.error('Failed to get calendar:', error);
+      return null;
+    }
+  }
+
+  async createCalendar(name: string, description?: string, color?: string): Promise<string> {
+    try {
+      const calendarId = `calendar-${Date.now()}`;
+
+      const response = await this.request([
+        ["Calendar/set", {
+          accountId: this.accountId,
+          create: {
+            [calendarId]: {
+              name: name,
+              description: description,
+              color: color,
+            },
+          },
+        }, "0"]
+      ]);
+
+      if (response.methodResponses?.[0]?.[0] === "Calendar/set") {
+        const result = response.methodResponses[0][1];
+        if (result.created?.[calendarId]) {
+          return result.created[calendarId].id;
+        }
+      }
+
+      throw new Error('Failed to create calendar');
+    } catch (error) {
+      console.error('Failed to create calendar:', error);
+      throw error;
+    }
+  }
+
+  async updateCalendar(calendarId: string, updates: Partial<Calendar>): Promise<void> {
+    try {
+      await this.request([
+        ["Calendar/set", {
+          accountId: this.accountId,
+          update: {
+            [calendarId]: updates,
+          },
+        }, "0"]
+      ]);
+    } catch (error) {
+      console.error('Failed to update calendar:', error);
+      throw error;
+    }
+  }
+
+  async deleteCalendar(calendarId: string): Promise<void> {
+    try {
+      await this.request([
+        ["Calendar/set", {
+          accountId: this.accountId,
+          destroy: [calendarId],
+        }, "0"]
+      ]);
+    } catch (error) {
+      console.error('Failed to delete calendar:', error);
+      throw error;
+    }
+  }
+
+  async getCalendarEvents(calendarId: string, limit: number = 1000, position: number = 0): Promise<{ events: CalendarEvent[], hasMore: boolean, total: number }> {
+    try {
+      console.log(`[JMAP] Fetching events for calendar: ${calendarId}`);
+      
+      // Get calendar account ID using the calendar capability  
+      const calendarCapability = 'urn:ietf:params:jmap:calendars';
+      const calendarAccountId = this.getAccountIdForCapability(calendarCapability);
+      
+      if (!calendarAccountId) {
+        console.error('[JMAP] No calendar account ID found');
+        return { events: [], hasMore: false, total: 0 };
+      }
+
+      console.log(`[JMAP] Using calendar account ID: ${calendarAccountId}`);
+
+      // Build date range filter for the current month
+      // Stalwart doesn't support calendarIds filter, so we'll filter client-side
+      const now = new Date();
+      const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+      const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
+      
+      const filter = {
+        after: monthStart.toISOString(),
+        before: monthEnd.toISOString(),
+      };
+
+      console.log(`[JMAP] Using filter:`, filter);
+
+      // Query with date range filter first
+      let response = await this.request([
+        ["CalendarEvent/query", {
+          accountId: calendarAccountId,
+          filter: filter,
+          sort: [{ property: "start", isAscending: true }],
+          limit: limit,
+          position: position,
+        }, "0"],
+        ["CalendarEvent/get", {
+          accountId: calendarAccountId,
+          "#ids": {
+            resultOf: "0",
+            name: "CalendarEvent/query",
+            path: "/ids",
+          },
+          properties: [
+            "id",
+            "calendarId",
+            "calendarIds",
+            "title",
+            "description",
+            "location",
+            "start",
+            "end",
+            "duration",
+            "timeZone",
+            "showWithoutTime",
+            "recurrenceRules",
+            "participants",
+            "priority",
+            "freeBusyStatus",
+            "privacy",
+            "created",
+            "updated",
+          ],
+        }, "1"],
+      ]);
+
+      const queryResponse = response.methodResponses?.[0];
+      const getResponse = response.methodResponses?.[1];
+
+      if (!queryResponse || !getResponse) {
+        console.error(`[JMAP] Invalid response for calendar ${calendarId}:`, response);
+        return { events: [], hasMore: false, total: 0 };
+      }
+
+      const [queryMethod, queryData] = queryResponse;
+      const [getMethod, getData] = getResponse;
+
+      console.log(`[JMAP] Query method: ${queryMethod}`);
+      console.log(`[JMAP] Get method: ${getMethod}`);
+
+      // Check for query errors
+      if (queryMethod === "error") {
+        console.error('[JMAP] CalendarEvent/query error:', queryData);
+        
+        // If unsupported filter, retry with empty filter
+        if (queryData?.type === 'unsupportedFilter') {
+          console.warn('[JMAP] Date filter unsupported, retrying with empty filter');
+          return await this.getCalendarEventsWithEmptyFilter(calendarAccountId, calendarId, limit, position);
+        }
+        
+        return { events: [], hasMore: false, total: 0 };
+      }
+
+      if (queryMethod !== "CalendarEvent/query") {
+        console.error(`[JMAP] Expected CalendarEvent/query, got ${queryMethod}`);
+        return { events: [], hasMore: false, total: 0 };
+      }
+
+      console.log(`[JMAP] Query returned ${queryData?.ids?.length || 0} event IDs`);
+
+      // Check for get errors
+      if (getMethod === "error") {
+        console.error('[JMAP] CalendarEvent/get error:', getData);
+        return { events: [], hasMore: false, total: 0 };
+      }
+
+      if (getMethod !== "CalendarEvent/get") {
+        console.error(`[JMAP] Expected CalendarEvent/get, got ${getMethod}`);
+        return { events: [], hasMore: false, total: 0 };
+      }
+
+      // Get raw events from response
+      const rawEvents = getData.list || [];
+      console.log(`[JMAP] Retrieved ${rawEvents.length} events from server`);
+      if (rawEvents.length > 0) {
+        console.log(`[JMAP] First event structure:`, JSON.stringify(rawEvents[0], null, 2));
+      }
+      
+      // Filter events to only include those from the requested calendar (client-side filtering)
+      const calendarIdSet = new Set([calendarId]);
+      const filteredEvents = rawEvents.filter((event: any) => {
+        // Check for calendarIds object format (RFC 8984 format: { "id1": true, "id2": false })
+        if (event.calendarIds && typeof event.calendarIds === 'object' && !Array.isArray(event.calendarIds)) {
+          const eventCalendarIds = Object.keys(event.calendarIds).filter(key => event.calendarIds[key] === true);
+          const matches = eventCalendarIds.some(id => calendarIdSet.has(id));
+          if (matches) {
+            console.log(`[JMAP] Event ${event.id} matches via calendarIds:`, eventCalendarIds);
+          }
+          return matches;
+        }
+        // Check for calendarId (singular) format
+        if (event.calendarId) {
+          const matches = calendarIdSet.has(event.calendarId);
+          if (matches) {
+            console.log(`[JMAP] Event ${event.id} matches via calendarId: ${event.calendarId}`);
+          }
+          return matches;
+        }
+        // If no calendar info, don't include it
+        console.log(`[JMAP] Event ${event.id} has no calendar info - skipping`);
+        return false;
+      });
+      
+      console.log(`[JMAP] Filtered to ${filteredEvents.length} events for calendar ${calendarId}`);
+
+      // Map JMAP events to our interface
+      const events = filteredEvents.map((event: any) => this.mapJMAPEventToCalendarEvent(event, calendarId));
+      const total = queryData.total || 0;
+      const hasMore = total > 0
+        ? (position + events.length) < total
+        : false;
+
+      console.log(`[JMAP] Returning ${events.length} events from ${total} total for calendar ${calendarId}`);
+      return { events, hasMore, total };
+    } catch (error) {
+      console.error(`[JMAP] Failed to get calendar events for ${calendarId}:`, error);
+      return { events: [], hasMore: false, total: 0 };
+    }
+  }
+
+  private async getCalendarEventsWithEmptyFilter(
+    calendarAccountId: string,
+    calendarId: string,
+    limit: number = 1000,
+    position: number = 0
+  ): Promise<{ events: CalendarEvent[], hasMore: boolean, total: number }> {
+    try {
+      console.log(`[JMAP] Retrying with empty filter for calendar ${calendarId}`);
+      
+      // Retry with empty filter
+      const response = await this.request([
+        ["CalendarEvent/query", {
+          accountId: calendarAccountId,
+          filter: {},
+          sort: [{ property: "start", isAscending: true }],
+          limit: limit,
+          position: position,
+        }, "0"],
+        ["CalendarEvent/get", {
+          accountId: calendarAccountId,
+          "#ids": {
+            resultOf: "0",
+            name: "CalendarEvent/query",
+            path: "/ids",
+          },
+          properties: [
+            "id",
+            "calendarId",
+            "calendarIds",
+            "title",
+            "description",
+            "location",
+            "start",
+            "end",
+            "duration",
+            "timeZone",
+            "showWithoutTime",
+            "recurrenceRules",
+            "participants",
+            "priority",
+            "freeBusyStatus",
+            "privacy",
+            "created",
+            "updated",
+          ],
+        }, "1"],
+      ]);
+
+      const queryResponse = response.methodResponses?.[0];
+      const getResponse = response.methodResponses?.[1];
+
+      if (!queryResponse || !getResponse) {
+        console.error(`[JMAP] Invalid response for calendar ${calendarId} (empty filter retry):`, response);
+        return { events: [], hasMore: false, total: 0 };
+      }
+
+      const [queryMethod, queryData] = queryResponse;
+      const [getMethod, getData] = getResponse;
+
+      // Check for query errors
+      if (queryMethod === "error") {
+        console.error('[JMAP] CalendarEvent/query error (empty filter retry):', queryData);
+        return { events: [], hasMore: false, total: 0 };
+      }
+
+      if (queryMethod !== "CalendarEvent/query") {
+        console.error(`[JMAP] Expected CalendarEvent/query, got ${queryMethod}`);
+        return { events: [], hasMore: false, total: 0 };
+      }
+
+      // Check for get errors
+      if (getMethod === "error") {
+        console.error('[JMAP] CalendarEvent/get error (empty filter retry):', getData);
+        return { events: [], hasMore: false, total: 0 };
+      }
+
+      if (getMethod !== "CalendarEvent/get") {
+        console.error(`[JMAP] Expected CalendarEvent/get, got ${getMethod}`);
+        return { events: [], hasMore: false, total: 0 };
+      }
+
+      // Get raw events from response
+      const rawEvents = getData.list || [];
+      console.log(`[JMAP] Retrieved ${rawEvents.length} events from server (empty filter)`);
+      
+      // Filter events to only include those from the requested calendar (client-side filtering)
+      const calendarIdSet = new Set([calendarId]);
+      const filteredEvents = rawEvents.filter((event: any) => {
+        // Check for calendarIds object format (RFC 8984 format: { "id1": true, "id2": false })
+        if (event.calendarIds && typeof event.calendarIds === 'object' && !Array.isArray(event.calendarIds)) {
+          const eventCalendarIds = Object.keys(event.calendarIds).filter(key => event.calendarIds[key] === true);
+          return eventCalendarIds.some(id => calendarIdSet.has(id));
+        }
+        // Check for calendarId (singular) format
+        if (event.calendarId) {
+          return calendarIdSet.has(event.calendarId);
+        }
+        // If no calendar info, don't include it
+        return false;
+      });
+      
+      console.log(`[JMAP] Filtered to ${filteredEvents.length} events for calendar ${calendarId} (empty filter)`);
+
+      // Map JMAP events to our interface
+      const events = filteredEvents.map((event: any) => this.mapJMAPEventToCalendarEvent(event, calendarId));
+      const total = queryData.total || 0;
+      const hasMore = total > 0
+        ? (position + events.length) < total
+        : false;
+
+      console.log(`[JMAP] Returning ${events.length} events from ${total} total for calendar ${calendarId} (empty filter)`);
+      return { events, hasMore, total };
+    } catch (error) {
+      console.error(`[JMAP] Failed to get calendar events with empty filter for ${calendarId}:`, error);
+      return { events: [], hasMore: false, total: 0 };
+    }
+  }
+
+  async getCalendarEventsWithoutQuery(
+    calendarId: string,
+    limit: number = 50,
+    position: number = 0
+  ): Promise<{ events: CalendarEvent[]; hasMore: boolean; total: number }> {
+    try {
+      console.log(`Attempting fallback event fetch for ${calendarId} without references...`);
+      
+      // Try two separate requests without using references
+      // Note: We don't use calendar filters as some servers don't support them
+      const response = await this.request([
+        ["CalendarEvent/query", {
+          accountId: this.accountId,
+          filter: {},
+          sort: [{ property: "start", isAscending: true }],
+          limit: limit,
+          position: position,
+        }, "0"],
+      ]);
+
+      const queryResponse = response.methodResponses?.[0];
+      
+      if (!queryResponse) {
+        console.error(`No response from CalendarEvent/query fallback for ${calendarId}`);
+        return { events: [], hasMore: false, total: 0 };
+      }
+
+      const [queryMethod, queryData] = queryResponse;
+      
+      if (queryMethod === "error") {
+        console.error(`CalendarEvent/query error for ${calendarId}:`, queryData);
+        console.log(`Error type: ${queryData.type}, Error message: ${queryData.description}`);
+        // Try simple fetch as fallback
+        console.log(`Trying simple CalendarEvent/get without query...`);
+        return await this.getCalendarEventsSimple(calendarId);
+      }
+
+      if (queryMethod !== "CalendarEvent/query") {
+        console.error(`Expected CalendarEvent/query in fallback, got ${queryMethod}`);
+        return { events: [], hasMore: false, total: 0 };
+      }
+
+      // Now fetch the events using the IDs we got from the query
+      if (!queryData.ids || queryData.ids.length === 0) {
+        console.log(`No events found for calendar ${calendarId}`);
+        return { events: [], hasMore: false, total: 0 };
+      }
+
+      const getResponse = await this.request([
+        ["CalendarEvent/get", {
+          accountId: this.accountId,
+          ids: queryData.ids,
+          properties: [
+            "id",
+            "calendarId",
+            "title",
+            "description",
+            "location",
+            "start",
+            "end",
+            "startTime",
+            "endTime",
+            "duration",
+            "isAllDay",
+            "timeZone",
+            "timezone",
+            "recurrence",
+            "recurrenceRules",
+            "recurrenceId",
+            "status",
+            "transparency",
+            "isPrivate",
+            "organizer",
+            "participants",
+            "categories",
+            "priority",
+            "attachments",
+            "alarm",
+            "created",
+            "updated",
+          ],
+        }, "0"],
+      ]);
+
+      const getMethodResponse = getResponse.methodResponses?.[0];
+      
+      if (!getMethodResponse) {
+        console.error(`No response from CalendarEvent/get fallback for ${calendarId}`);
+        return { events: [], hasMore: false, total: 0 };
+      }
+
+      const [getMethod, getData] = getMethodResponse;
+
+      if (getMethod === "error") {
+        console.error(`CalendarEvent/get error in fallback for ${calendarId}:`, getData);
+        return { events: [], hasMore: false, total: 0 };
+      }
+
+      if (getMethod !== "CalendarEvent/get") {
+        console.error(`Expected CalendarEvent/get in fallback, got ${getMethod}`);
+        return { events: [], hasMore: false, total: 0 };
+      }
+
+      const rawEvents = getData.list || [];
+      // Filter events to only include those from the requested calendar (client-side filtering)
+      const filteredEvents = rawEvents.filter((event: any) => {
+        // Check for calendarIds object format (RFC 8984 format)
+        if (event.calendarIds && typeof event.calendarIds === 'object' && !Array.isArray(event.calendarIds)) {
+          const eventCalendarIds = Object.keys(event.calendarIds).filter(key => event.calendarIds[key] === true);
+          return eventCalendarIds.includes(calendarId);
+        }
+        // Check for calendarId (singular) format
+        if (event.calendarId) {
+          return event.calendarId === calendarId;
+        }
+        // Fallback: if neither property exists, include it
+        return true;
+      });
+      const events = filteredEvents.map((event: any) => this.mapJMAPEventToCalendarEvent(event));
+      const total = queryData.total || 0;
+      const hasMore = total > 0
+        ? (position + events.length) < total
+        : false;
+
+      console.log(`Fallback: Got ${events.length} events from ${total} total for calendar ${calendarId}`);
+      return { events, hasMore, total };
+    } catch (error) {
+      console.error(`Fallback event fetch failed for ${calendarId}:`, error);
+      return { events: [], hasMore: false, total: 0 };
+    }
+  }
+
+  async getCalendarEventsSimple(calendarId: string): Promise<{ events: CalendarEvent[]; hasMore: boolean; total: number }> {
+    try {
+      console.log(`Attempting simple calendar event fetch for ${calendarId}...`);
+      
+      // Just try to get a small batch of events directly
+      // Some JMAP servers might not support the advanced query
+      const response = await this.request([
+        ["CalendarEvent/get", {
+          accountId: this.accountId,
+          properties: [
+            "id",
+            "calendarId",
+            "title",
+            "description",
+            "location",
+            "start",
+            "end",
+            "startTime",
+            "endTime",
+            "duration",
+            "isAllDay",
+            "timeZone",
+            "timezone",
+            "recurrence",
+            "recurrenceRules",
+            "recurrenceId",
+            "status",
+            "transparency",
+            "isPrivate",
+            "organizer",
+            "participants",
+            "categories",
+            "priority",
+            "attachments",
+            "alarm",
+            "created",
+            "updated",
+          ],
+        }, "0"],
+      ]);
+
+      const methodResponse = response.methodResponses?.[0];
+      
+      if (!methodResponse) {
+        console.error(`No response from simple CalendarEvent/get for ${calendarId}`);
+        return { events: [], hasMore: false, total: 0 };
+      }
+
+      const [method, data] = methodResponse;
+
+      if (method === "error") {
+        console.error(`CalendarEvent/get simple fetch error for ${calendarId}:`, data);
+        return { events: [], hasMore: false, total: 0 };
+      }
+
+      if (method !== "CalendarEvent/get") {
+        console.error(`Expected CalendarEvent/get in simple fetch, got ${method}`);
+        return { events: [], hasMore: false, total: 0 };
+      }
+
+      const rawEvents = data.list || [];
+      // Filter events to only include those from the requested calendar (client-side filtering)
+      const filteredEvents = rawEvents.filter((event: any) => {
+        // Check for calendarIds object format (RFC 8984 format)
+        if (event.calendarIds && typeof event.calendarIds === 'object' && !Array.isArray(event.calendarIds)) {
+          const eventCalendarIds = Object.keys(event.calendarIds).filter(key => event.calendarIds[key] === true);
+          return eventCalendarIds.includes(calendarId);
+        }
+        // Check for calendarId (singular) format
+        if (event.calendarId) {
+          return event.calendarId === calendarId;
+        }
+        // Fallback: if neither property exists, include it
+        return true;
+      });
+      const events = filteredEvents.map((event: any) => this.mapJMAPEventToCalendarEvent(event));
+
+      console.log(`Simple fetch: Got ${events.length} events for calendar ${calendarId}`);
+      return { events, hasMore: false, total: events.length };
+    } catch (error) {
+      console.error(`Simple calendar event fetch failed for ${calendarId}:`, error);
+      return { events: [], hasMore: false, total: 0 };
+    }
+  }
+
+  async getCalendarEvent(eventId: string): Promise<CalendarEvent | null> {
+    try {
+      const response = await this.request([
+        ["CalendarEvent/get", {
+          accountId: this.accountId,
+          ids: [eventId],
+          properties: [
+            "id",
+            "calendarId",
+            "title",
+            "description",
+            "location",
+            "start",
+            "end",
+            "startTime",
+            "endTime",
+            "duration",
+            "isAllDay",
+            "timeZone",
+            "timezone",
+            "recurrence",
+            "recurrenceRules",
+            "recurrenceId",
+            "status",
+            "transparency",
+            "isPrivate",
+            "organizer",
+            "participants",
+            "categories",
+            "priority",
+            "attachments",
+            "alarm",
+            "created",
+            "updated",
+          ],
+        }, "0"]
+      ]);
+
+      if (response.methodResponses?.[0]?.[0] === "CalendarEvent/get") {
+        const events = response.methodResponses[0][1].list || [];
+        const rawEvent = events[0];
+        if (rawEvent) {
+          return this.mapJMAPEventToCalendarEvent(rawEvent);
+        }
+      }
+
+      return null;
+    } catch (error) {
+      console.error('Failed to get calendar event:', error);
+      return null;
+    }
+  }
+
+  async createCalendarEvent(calendarId: string, event: Omit<CalendarEvent, 'id' | 'calendarId' | 'createdAt' | 'updatedAt'>): Promise<string> {
+    try {
+      const eventId = `event-${Date.now()}`;
+      
+      // Convert interface format to RFC 8984 JMAP format
+      // Interface uses startTime/endTime, JMAP uses start/duration
+      let start = event.startTime;
+      let duration = 'PT0S'; // default zero duration
+      
+      if (event.startTime && event.endTime) {
+        // Calculate duration from start and end times
+        const startDate = new Date(event.startTime);
+        const endDate = new Date(event.endTime);
+        const diffMs = endDate.getTime() - startDate.getTime();
+        const diffSecs = Math.floor(diffMs / 1000);
+        
+        // Convert to ISO 8601 duration format
+        const hours = Math.floor(diffSecs / 3600);
+        const minutes = Math.floor((diffSecs % 3600) / 60);
+        const seconds = diffSecs % 60;
+        
+        let durationStr = 'P';
+        if (hours >= 24) {
+          durationStr += `${Math.floor(hours / 24)}D`;
+          duration = durationStr + (hours % 24 > 0 || minutes > 0 || seconds > 0 
+            ? `T${(hours % 24)}H${minutes}M${seconds}S` 
+            : '');
+        } else {
+          durationStr += `T${hours}H${minutes}M${seconds}S`;
+          duration = durationStr;
+        }
+      } else if (event.endTime && !event.startTime) {
+        start = event.endTime;
+      }
+      
+      // Ensure event has proper RFC 8984 format
+      const eventData: any = {
+        '@type': 'Event',
+        uid: `uid-${eventId}`,
+        title: event.title || '',
+        start: start || new Date().toISOString(),
+        duration: duration,
+        ...(event.description && { description: event.description }),
+        // Note: location is not supported by Stalwart's JMAP implementation
+        ...(event.isAllDay && { showWithoutTime: event.isAllDay }),
+        ...(event.timezone && { timeZone: event.timezone }),
+        // Assign to calendar
+        calendarIds: { [calendarId]: true },
+      };
+
+      const response = await this.request([
+        ["CalendarEvent/set", {
+          accountId: this.accountId,
+          create: {
+            [eventId]: eventData,
+          },
+        }, "0"]
+      ]);
+
+      if (response.methodResponses?.[0]?.[0] === "CalendarEvent/set") {
+        const result = response.methodResponses[0][1];
+        if (result.created?.[eventId]) {
+          const createdEvent = result.created[eventId];
+          return createdEvent.id || eventId;
+        }
+        // Log what went wrong
+        console.warn('CalendarEvent/set response:', result);
+        if (result.notCreated) {
+          const error = result.notCreated[eventId];
+          console.error('Event creation error details:', error);
+          const invalidProps = error?.properties?.join(', ') || 'unknown';
+          throw new Error(`Failed to create calendar event: ${error?.type || 'Unknown error'} - Invalid properties: ${invalidProps}`);
+        }
+      }
+
+      throw new Error(`Failed to create calendar event: Invalid response - ${response.methodResponses?.[0]?.[0] || 'No response'}`);
+    } catch (error) {
+      console.error('Failed to create calendar event:', error);
+      throw error;
+    }
+  }
+
+  async updateCalendarEvent(eventId: string, updates: Partial<CalendarEvent>): Promise<void> {
+    try {
+      // Convert interface format to RFC 8984 JMAP format
+      const jmapUpdates: any = {};
+      
+      if (updates.title !== undefined) jmapUpdates.title = updates.title;
+      if (updates.description !== undefined) jmapUpdates.description = updates.description;
+      if (updates.location !== undefined) jmapUpdates.location = updates.location;
+      if (updates.isAllDay !== undefined) jmapUpdates.showWithoutTime = updates.isAllDay;
+      if (updates.timezone !== undefined) jmapUpdates.timeZone = updates.timezone;
+      
+      // Handle start/duration conversion
+      if (updates.startTime !== undefined || updates.endTime !== undefined) {
+        if (updates.startTime) {
+          jmapUpdates.start = updates.startTime;
+        }
+        if (updates.startTime && updates.endTime) {
+          const startDate = new Date(updates.startTime);
+          const endDate = new Date(updates.endTime);
+          const diffMs = endDate.getTime() - startDate.getTime();
+          const diffSecs = Math.floor(diffMs / 1000);
+          
+          const hours = Math.floor(diffSecs / 3600);
+          const minutes = Math.floor((diffSecs % 3600) / 60);
+          const seconds = diffSecs % 60;
+          
+          let durationStr = 'P';
+          if (hours >= 24) {
+            durationStr += `${Math.floor(hours / 24)}D`;
+            jmapUpdates.duration = durationStr + (hours % 24 > 0 || minutes > 0 || seconds > 0 
+              ? `T${(hours % 24)}H${minutes}M${seconds}S` 
+              : '');
+          } else {
+            durationStr += `T${hours}H${minutes}M${seconds}S`;
+            jmapUpdates.duration = durationStr;
+          }
+        }
+      }
+      
+      await this.request([
+        ["CalendarEvent/set", {
+          accountId: this.accountId,
+          update: {
+            [eventId]: jmapUpdates,
+          },
+        }, "0"]
+      ]);
+    } catch (error) {
+      console.error('Failed to update calendar event:', error);
+      throw error;
+    }
+  }
+
+  async deleteCalendarEvent(eventId: string): Promise<void> {
+    try {
+      await this.request([
+        ["CalendarEvent/set", {
+          accountId: this.accountId,
+          destroy: [eventId],
+        }, "0"]
+      ]);
+    } catch (error) {
+      console.error('Failed to delete calendar event:', error);
+      throw error;
+    }
+  }
+
+  async updateCalendarEventParticipantStatus(eventId: string, participantEmail: string, status: 'accepted' | 'declined' | 'tentative' | 'needs-action'): Promise<void> {
+    try {
+      // Get the current event
+      const event = await this.getCalendarEvent(eventId);
+      if (!event) {
+        throw new Error('Event not found');
+      }
+
+      // Update participant status
+      const updatedParticipants = (event.participants || []).map(p => {
+        if (p.email === participantEmail) {
+          return { ...p, status };
+        }
+        return p;
+      });
+
+      // Update the event
+      await this.updateCalendarEvent(eventId, {
+        participants: updatedParticipants,
+      });
+    } catch (error) {
+      console.error('Failed to update participant status:', error);
+      throw error;
+    }
+  }
+
+  async getCalendarEventsByDateRange(calendarId: string, startDate: Date, endDate: Date): Promise<CalendarEvent[]> {
+    try {
+      const startISO = startDate.toISOString();
+      const endISO = endDate.toISOString();
+
+      const response = await this.request([
+        ["CalendarEvent/query", {
+          accountId: this.accountId,
+          filter: {
+            inCalendars: [calendarId],
+            before: endISO,
+            after: startISO,
+          },
+          sort: [{ property: "startTime", isAscending: true }],
+        }, "0"],
+        ["CalendarEvent/get", {
+          accountId: this.accountId,
+          "#ids": {
+            resultOf: "0",
+            name: "CalendarEvent/query",
+            path: "/ids",
+          },
+          properties: [
+            "id",
+            "calendarId",
+            "title",
+            "description",
+            "location",
+            "start",
+            "end",
+            "startTime",
+            "endTime",
+            "duration",
+            "isAllDay",
+            "timeZone",
+            "timezone",
+            "recurrence",
+            "recurrenceRules",
+            "recurrenceId",
+            "status",
+            "transparency",
+            "isPrivate",
+            "organizer",
+            "participants",
+            "categories",
+            "priority",
+            "attachments",
+            "alarm",
+            "created",
+            "updated",
+          ],
+        }, "1"],
+      ]);
+
+      if (response.methodResponses?.[1]?.[0] === "CalendarEvent/get") {
+        const rawEvents = response.methodResponses[1][1].list || [];
+        const events = rawEvents.map((event: any) => this.mapJMAPEventToCalendarEvent(event));
+        return events;
+      }
+
+      return [];
+    } catch (error) {
+      console.error('Failed to get calendar events by date range:', error);
+      return [];
+    }
+  }
+
+  supportsCalendars(): boolean {
+    return this.hasCapability("urn:ietf:params:jmap:calendars");
   }
 }

@@ -4,6 +4,7 @@ import { formatDate } from "@/lib/utils";
 import { Email, ThreadGroup } from "@/lib/jmap/types";
 import { cn } from "@/lib/utils";
 import { Avatar } from "@/components/ui/avatar";
+import { Favicon } from "@/components/favicon";
 import { Paperclip, Star, Circle, ChevronRight, ChevronDown, Loader2 } from "lucide-react";
 import { useSettingsStore } from "@/stores/settings-store";
 import { useUIStore } from "@/stores/ui-store";
@@ -62,7 +63,12 @@ export function ThreadListItem({
       <SingleEmailItem
         email={latestEmail}
         selected={selectedEmailId === latestEmail.id}
-        onClick={() => onEmailSelect(latestEmail)}
+        onClick={() => {
+          if (onOpenConversation) {
+            onOpenConversation(thread);
+          }
+          onEmailSelect(latestEmail);
+        }}
         onContextMenu={onContextMenu}
         showPreview={showPreview}
         colorTag={colorTag}
@@ -74,23 +80,23 @@ export function ThreadListItem({
   const emailsToShow = expandedEmails || thread.emails;
 
   const handleHeaderClick = (e: React.MouseEvent) => {
-    // Mobile: open conversation view instead of inline expansion
-    if (isMobile && onOpenConversation) {
+    // Both Mobile and Desktop: Open full conversation view when clicking the header
+    if (onOpenConversation) {
       onOpenConversation(thread);
-      return;
     }
-
-    // Desktop: If clicking directly on the expand icon area, toggle expansion
-    // Otherwise, select the latest email
+    
+    // Also select the latest email for background state
+    onEmailSelect(latestEmail);
+    
+    // Desktop: Toggle expansion if clicking icon OR if not already expanded and not mobile
     const target = e.target as HTMLElement;
     if (target.closest('[data-expand-toggle]')) {
       onToggleExpand();
-    } else {
-      // Clicking on the row selects the latest email but also expands
-      if (!isExpanded) {
-        onToggleExpand();
-      }
-      onEmailSelect(latestEmail);
+      return;
+    }
+
+    if (!isExpanded && !isMobile) {
+      onToggleExpand();
     }
   };
 
@@ -155,13 +161,24 @@ export function ThreadListItem({
             </div>
           )}
 
-          {/* Avatar */}
-          <Avatar
-            name={latestEmail.from?.[0]?.name}
-            email={latestEmail.from?.[0]?.email}
-            size="md"
-            className="flex-shrink-0 shadow-sm"
-          />
+          {/* Avatar with Favicon overlay */}
+          <div className="relative flex-shrink-0">
+            <Avatar
+              name={latestEmail.from?.[0]?.name}
+              email={latestEmail.from?.[0]?.email}
+              size="md"
+              className="flex-shrink-0 shadow-sm"
+            />
+            {latestEmail.from?.[0]?.email && (
+              <div className="absolute -bottom-1 -right-1 w-4 h-4 bg-background rounded-full border border-border shadow-sm overflow-hidden z-10">
+                <Favicon
+                  email={latestEmail.from[0].email}
+                  size="sm"
+                  className="w-full h-full"
+                />
+              </div>
+            )}
+          </div>
 
           {/* Content */}
           <div className="flex-1 min-w-0">
@@ -177,15 +194,17 @@ export function ThreadListItem({
                   {participantNames.join(", ")}
                 </span>
                 {/* Email count badge */}
-                <span className={cn(
-                  "flex-shrink-0 px-1.5 py-0.5 text-xs rounded-full font-medium",
-                  hasUnread
-                    ? "bg-primary text-primary-foreground"
-                    : "bg-muted text-muted-foreground"
-                )}>
-                  {emailCount}
-                </span>
-                <div className="flex items-center gap-1.5">
+                {emailCount > 1 && (
+                  <span className={cn(
+                    "flex-shrink-0 px-1.5 py-0.5 text-[10px] font-bold rounded-full min-w-[1.25rem] text-center",
+                    hasUnread
+                      ? "bg-primary text-primary-foreground"
+                      : "bg-muted text-muted-foreground border border-border"
+                  )}>
+                    {emailCount}
+                  </span>
+                )}
+                <div className="flex items-center gap-1.5 ml-1">
                   {hasStarred && (
                     <Star className="w-3.5 h-3.5 fill-amber-400 text-amber-400" />
                   )}
@@ -229,11 +248,11 @@ export function ThreadListItem({
         </div>
       </div>
 
-      {/* Expanded Thread Emails - Desktop only */}
-      {isExpanded && !isMobile && (
-        <div className="bg-muted/20 animate-in slide-in-from-top-2 duration-200">
+      {/* Expanded Thread Emails */}
+      {isExpanded && (
+        <div className="bg-muted/30">
           {isLoading ? (
-            <div className="py-4 flex items-center justify-center text-sm text-muted-foreground">
+            <div className="px-12 py-4 flex items-center text-sm text-muted-foreground italic">
               <Loader2 className="w-4 h-4 animate-spin mr-2" />
               Loading conversation...
             </div>
@@ -244,7 +263,12 @@ export function ThreadListItem({
                 email={email}
                 selected={email.id === selectedEmailId}
                 isLast={index === emailsToShow.length - 1}
-                onClick={() => onEmailSelect(email)}
+                onClick={() => {
+                  if (onOpenConversation) {
+                    onOpenConversation(thread);
+                  }
+                  onEmailSelect(email);
+                }}
                 onContextMenu={onContextMenu}
               />
             ))
@@ -311,13 +335,24 @@ function SingleEmailItem({
           </div>
         )}
 
-        {/* Avatar */}
-        <Avatar
-          name={sender?.name}
-          email={sender?.email}
-          size="md"
-          className="flex-shrink-0 shadow-sm"
-        />
+        {/* Avatar with Favicon overlay */}
+        <div className="relative flex-shrink-0">
+          <Avatar
+            name={sender?.name}
+            email={sender?.email}
+            size="md"
+            className="flex-shrink-0 shadow-sm"
+          />
+          {sender?.email && (
+            <div className="absolute -bottom-1 -right-1 w-4 h-4 bg-background rounded-full border border-border shadow-sm overflow-hidden z-10">
+              <Favicon
+                email={sender.email}
+                size="sm"
+                className="w-full h-full"
+              />
+            </div>
+          )}
+        </div>
 
         {/* Content */}
         <div className="flex-1 min-w-0">

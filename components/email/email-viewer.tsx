@@ -5,6 +5,7 @@ import DOMPurify from "dompurify";
 import { Email } from "@/lib/jmap/types";
 import { Button } from "@/components/ui/button";
 import { Avatar } from "@/components/ui/avatar";
+import { Favicon } from "@/components/favicon";
 import { formatFileSize, cn } from "@/lib/utils";
 import { getSecurityStatus } from "@/lib/email-headers";
 import {
@@ -50,6 +51,7 @@ import {
 import { useTranslations } from "next-intl";
 import { useSettingsStore } from "@/stores/settings-store";
 import { useUIStore } from "@/stores/ui-store";
+import { useAuthStore } from "@/stores/auth-store";
 import { useDeviceDetection } from "@/hooks/use-media-query";
 
 interface EmailViewerProps {
@@ -153,7 +155,11 @@ export function EmailViewer({
   const [isQuickReplyFocused, setIsQuickReplyFocused] = useState(false);
   const [isSendingQuickReply, setIsSendingQuickReply] = useState(false);
   const [showSourceModal, setShowSourceModal] = useState(false);
+  const [rawSource, setRawSource] = useState<string | null>(null);
+  const [isLoadingRawSource, setIsLoadingRawSource] = useState(false);
+  const [fetchError, setFetchError] = useState<string | null>(null);
   const currentColor = getCurrentColor(email?.keywords);
+  const { client } = useAuthStore();
 
   useEffect(() => {
     // Mark as read when email is viewed
@@ -172,7 +178,28 @@ export function EmailViewer({
     setQuickReplyText("");
     setIsQuickReplyFocused(false);
     setShowSourceModal(false);
+    setRawSource(null);
   }, [email?.id, externalContentPolicy]);
+
+  // Fetch raw source when modal is opened
+  useEffect(() => {
+    if (showSourceModal && email && client && !rawSource) {
+      const fetchRaw = async () => {
+        setIsLoadingRawSource(true);
+        setFetchError(null);
+        try {
+          const raw = await client.getRawEmail(email.id);
+          setRawSource(raw);
+        } catch (error) {
+          console.error("Failed to fetch raw email source:", error);
+          setFetchError(error instanceof Error ? error.message : String(error));
+        } finally {
+          setIsLoadingRawSource(false);
+        }
+      };
+      fetchRaw();
+    }
+  }, [showSourceModal, email, client, rawSource]);
 
   // Generate email source for viewing
   const generateEmailSource = (email: Email): string => {
@@ -317,7 +344,7 @@ export function EmailViewer({
     if (!email) return;
 
     try {
-      const source = generateEmailSource(email);
+      const source = rawSource || generateEmailSource(email);
       await navigator.clipboard.writeText(source);
       // Could add a toast notification here
       console.log(tNotifications('source_copied'));
@@ -778,12 +805,24 @@ export function EmailViewer({
       {/* Sender Info - Desktop only (hidden on mobile/tablet, they see it in scrollable content) */}
       <div className="hidden lg:block bg-background border-b border-border px-6 py-4">
           <div className="flex items-start gap-4">
-            <Avatar
-              name={sender?.name}
-              email={sender?.email}
-              size="lg"
-              className="shadow-sm w-12 h-12"
-            />
+            <div className="relative w-12 h-12 flex-shrink-0">
+              <Avatar
+                name={sender?.name}
+                email={sender?.email}
+                size="lg"
+                className="shadow-sm w-full h-full"
+              />
+              {/* Favicon overlay */}
+              {sender?.email && (
+                <div className="absolute bottom-0 right-0 w-5 h-5 bg-background rounded-full border border-border shadow-sm overflow-hidden">
+                  <Favicon
+                    email={sender.email}
+                    size="md"
+                    className="w-full h-full"
+                  />
+                </div>
+              )}
+            </div>
 
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2 flex-wrap">
@@ -1456,9 +1495,28 @@ export function EmailViewer({
 
             {/* Modal Content */}
             <div className="flex-1 overflow-auto p-4 bg-muted/30">
-              <pre className="text-xs font-mono text-foreground whitespace-pre-wrap break-words bg-background border border-border rounded-lg p-4">
-                {generateEmailSource(email)}
-              </pre>
+              {isLoadingRawSource ? (
+                <div className="flex flex-col items-center justify-center py-12 gap-3 text-muted-foreground">
+                  <Loader2 className="w-8 h-8 animate-spin" />
+                  <p className="text-sm font-medium">Fetching raw message and headers...</p>
+                </div>
+              ) : fetchError ? (
+                <div className="flex flex-col items-center justify-center py-12 gap-3 text-destructive">
+                  <AlertTriangle className="w-8 h-8" />
+                  <p className="text-sm font-medium text-center px-8">
+                    Failed to fetch the real source from the server.<br/>
+                    Showing generated source fallback instead.<br/>
+                    <span className="text-xs opacity-70 mt-2 block font-mono bg-destructive/5 p-2 rounded border border-destructive/20">{fetchError}</span>
+                  </p>
+                  <pre className="text-xs font-mono text-foreground whitespace-pre-wrap break-words bg-background border border-border rounded-lg p-4 mt-4 w-full">
+                    {generateEmailSource(email)}
+                  </pre>
+                </div>
+              ) : (
+                <pre className="text-xs font-mono text-foreground whitespace-pre-wrap break-words bg-background border border-border rounded-lg p-4">
+                  {rawSource || generateEmailSource(email)}
+                </pre>
+              )}
             </div>
           </div>
         </div>

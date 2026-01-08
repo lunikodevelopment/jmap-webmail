@@ -9,11 +9,13 @@ import { AppearanceSettings } from '@/components/settings/appearance-settings';
 import { EmailSettings } from '@/components/settings/email-settings';
 import { EmailFiltersSettings } from '@/components/settings/email-filters-settings';
 import { EmailTemplatesSettings } from '@/components/settings/email-templates-settings';
+import { EmailSignaturesSettings } from '@/components/settings/email-signatures-settings';
+import { VacationResponderSettings } from '@/components/settings/vacation-responder-settings';
 import { AccountSettings } from '@/components/settings/account-settings';
 import { AdvancedSettings } from '@/components/settings/advanced-settings';
 import { cn } from '@/lib/utils';
 
-type Tab = 'appearance' | 'email' | 'filters' | 'templates' | 'account' | 'advanced';
+type Tab = 'appearance' | 'email' | 'filters' | 'templates' | 'signatures' | 'vacation' | 'account' | 'advanced';
 
 export default function SettingsPage() {
   const router = useRouter();
@@ -25,6 +27,8 @@ export default function SettingsPage() {
     { id: 'email', label: t('tabs.email') },
     { id: 'filters', label: t('tabs.filters') },
     { id: 'templates', label: t('tabs.templates') },
+    { id: 'signatures', label: t('tabs.signatures') },
+    { id: 'vacation', label: t('tabs.vacation') },
     { id: 'account', label: t('tabs.account') },
     { id: 'advanced', label: t('tabs.advanced') },
   ];
@@ -84,6 +88,8 @@ export default function SettingsPage() {
             {activeTab === 'email' && <EmailSettings />}
             {activeTab === 'filters' && <EmailFiltersSettings />}
             {activeTab === 'templates' && <EmailTemplatesSettings />}
+            {activeTab === 'signatures' && <EmailSignaturesSettings />}
+            {activeTab === 'vacation' && <VacationResponderSettings />}
             {activeTab === 'account' && <AccountSettings />}
             {activeTab === 'advanced' && <AdvancedSettings />}
           </div>

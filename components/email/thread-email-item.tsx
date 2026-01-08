@@ -4,6 +4,7 @@ import { formatDate } from "@/lib/utils";
 import { Email } from "@/lib/jmap/types";
 import { cn } from "@/lib/utils";
 import { Avatar } from "@/components/ui/avatar";
+import { Favicon } from "@/components/favicon";
 import { Paperclip, Star, Circle } from "lucide-react";
 
 interface ThreadEmailItemProps {
@@ -52,13 +53,24 @@ export function ThreadEmailItem({
           </div>
         )}
 
-        {/* Small Avatar */}
-        <Avatar
-          name={sender?.name}
-          email={sender?.email}
-          size="sm"
-          className="flex-shrink-0"
-        />
+        {/* Small Avatar with Favicon overlay */}
+        <div className="relative flex-shrink-0">
+          <Avatar
+            name={sender?.name}
+            email={sender?.email}
+            size="sm"
+            className="flex-shrink-0 shadow-sm"
+          />
+          {sender?.email && (
+            <div className="absolute -bottom-0.5 -right-0.5 w-3 h-3 bg-background rounded-full border border-border shadow-sm overflow-hidden z-10">
+              <Favicon
+                email={sender.email}
+                size="sm"
+                className="w-full h-full"
+              />
+            </div>
+          )}
+        </div>
 
         {/* Content */}
         <div className="flex-1 min-w-0">

@@ -19,6 +19,7 @@ export default function LoginPage() {
   const [formData, setFormData] = useState({
     username: "",
     password: "",
+    rememberMe: false,
   });
 
   const [savedUsernames, setSavedUsernames] = useState<string[]>([]);
@@ -223,7 +224,8 @@ export default function LoginPage() {
     const success = await login(
       serverUrl,
       formData.username,
-      formData.password
+      formData.password,
+      formData.rememberMe
     );
 
     if (success) {
@@ -315,6 +317,19 @@ export default function LoginPage() {
               required
               autoComplete="current-password"
             />
+          </div>
+
+          <div className="flex items-center gap-2">
+            <input
+              id="remember-me"
+              type="checkbox"
+              checked={formData.rememberMe}
+              onChange={(e) => setFormData({ ...formData, rememberMe: e.target.checked })}
+              className="w-4 h-4 rounded border border-border/50 bg-secondary/50 cursor-pointer accent-primary"
+            />
+            <label htmlFor="remember-me" className="text-sm text-muted-foreground cursor-pointer select-none">
+              {t("remember_me") || "Remember me"}
+            </label>
           </div>
 
           <Button

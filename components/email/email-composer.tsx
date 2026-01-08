@@ -9,7 +9,9 @@ import { X, Paperclip, Send, Save, Check, Loader2, AlertCircle, Zap, ChevronDown
 import { cn } from "@/lib/utils";
 import { useAuthStore } from "@/stores/auth-store";
 import { useTemplateStore } from "@/stores/template-store";
+import { useSignatureStore } from "@/stores/signature-store";
 import { substituteVariables } from "@/lib/template-types";
+import { formatSignatureWithSeparator } from "@/lib/signature-types";
 
 interface EmailComposerProps {
   onSend?: (data: {
@@ -64,6 +66,14 @@ export function EmailComposer({
     return replyTo.cc?.map(r => r.email).join(", ") || "";
   };
 
+  // Store declarations - must be before helper functions that use them
+  const { client, identities, primaryIdentity } = useAuthStore();
+  const { templates } = useTemplateStore();
+  const { settings: signatureSettings, getDefaultSignature } = useSignatureStore();
+
+  // State declarations that are needed by helper functions
+  const [selectedIdentityId, setSelectedIdentityId] = useState<string | null>(null);
+
   const getInitialSubject = () => {
     if (!replyTo?.subject) return "";
     if (mode === 'forward') {
@@ -74,19 +84,52 @@ export function EmailComposer({
     return "";
   };
 
+  // Append signature to body
+  const appendSignature = (bodyText: string, shouldAppend: boolean): string => {
+    if (!shouldAppend) return bodyText;
+
+    const currentIdentity = selectedIdentityId
+      ? identities.find(id => id.id === selectedIdentityId)
+      : primaryIdentity;
+
+    if (!currentIdentity) return bodyText;
+
+    const signature = getDefaultSignature(currentIdentity.id);
+    if (!signature) return bodyText;
+
+    const formattedSignature = formatSignatureWithSeparator(
+      signature.content,
+      signatureSettings.separatorStyle
+    );
+
+    return bodyText + formattedSignature;
+  };
+
   const getInitialBody = () => {
-    if (!replyTo?.body) return "";
+    let bodyText = "";
 
-    const date = replyTo.receivedAt ? new Date(replyTo.receivedAt).toLocaleString() : "";
-    const from = replyTo.from?.[0];
-    const fromStr = from ? `${from.name || from.email}` : "Unknown";
+    if (replyTo?.body) {
+      const date = replyTo.receivedAt ? new Date(replyTo.receivedAt).toLocaleString() : "";
+      const from = replyTo.from?.[0];
+      const fromStr = from ? `${from.name || from.email}` : "Unknown";
 
-    if (mode === 'forward') {
-      return `\n\n---------- Forwarded message ----------\nFrom: ${fromStr}\nDate: ${date}\nSubject: ${replyTo.subject || ""}\n\n${replyTo.body}`;
-    } else if (mode === 'reply' || mode === 'replyAll') {
-      return `\n\nOn ${date}, ${fromStr} wrote:\n> ${replyTo.body.split('\n').join('\n> ')}`;
+      if (mode === 'forward') {
+        bodyText = `\n\n---------- Forwarded message ----------\nFrom: ${fromStr}\nDate: ${date}\nSubject: ${replyTo.subject || ""}\n\n${replyTo.body}`;
+      } else if (mode === 'reply' || mode === 'replyAll') {
+        bodyText = `\n\nOn ${date}, ${fromStr} wrote:\n> ${replyTo.body.split('\n').join('\n> ')}`;
+      }
     }
-    return "";
+
+    // Add signature for new emails or based on settings
+    if (mode === 'compose' && signatureSettings.autoAppendSignature) {
+      bodyText = appendSignature(bodyText, true);
+    } else if ((mode === 'reply' || mode === 'replyAll') && signatureSettings.autoAppendToReplies) {
+      bodyText = appendSignature(bodyText, true);
+    } else if (mode === 'forward' && signatureSettings.autoAppendToForwards) {
+      bodyText = appendSignature(bodyText, true);
+    }
+
+    return bodyText;
   };
 
   const [to, setTo] = useState(getInitialTo());
@@ -102,10 +145,6 @@ export function EmailComposer({
   const lastSavedDataRef = useRef<string>("");
   const [attachments, setAttachments] = useState<Array<{ file: File; blobId?: string; uploading?: boolean; error?: boolean }>>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const [selectedIdentityId, setSelectedIdentityId] = useState<string | null>(null);
-
-  const { client, identities, primaryIdentity } = useAuthStore();
-  const { templates } = useTemplateStore();
   
   const [showTemplateMenu, setShowTemplateMenu] = useState(false);
   const [showVariableForm, setShowVariableForm] = useState(false);
@@ -385,6 +424,29 @@ export function EmailComposer({
           )}
         </div>
         <div className="flex items-center gap-2">
+          {/* Signature button */}
+          {getDefaultSignature(selectedIdentityId || primaryIdentity?.id || '') && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                const signature = getDefaultSignature(selectedIdentityId || primaryIdentity?.id || '');
+                if (signature) {
+                  const formattedSignature = formatSignatureWithSeparator(
+                    signature.content,
+                    signatureSettings.separatorStyle
+                  );
+                  setBody(prev => prev + (prev ? '\n\n' : '') + formattedSignature);
+                }
+              }}
+              className="gap-1"
+              title="Insert signature"
+            >
+              <Zap className="w-4 h-4" />
+              {t('email_composer.signature')}
+            </Button>
+          )}
+
           {/* Template button */}
           <div className="relative">
             <Button

@@ -114,7 +114,7 @@ function MailboxTreeItem({
       <div
         {...(globalDragging ? dropHandlers : {})}
         className={cn(
-          "group w-full flex items-center px-2 py-1 lg:py-1 max-lg:py-3 max-lg:min-h-[44px] text-sm transition-all duration-200",
+          "group w-full flex items-center px-1.5 sm:px-2 py-1 lg:py-1 max-lg:py-2 max-lg:min-h-[40px] text-xs sm:text-sm transition-all duration-200",
           selectedMailbox === node.id
             ? "bg-accent text-accent-foreground"
             : "hover:bg-muted text-foreground",
@@ -131,7 +131,7 @@ function MailboxTreeItem({
               onToggleExpand(node.id);
             }}
             className={cn(
-              "p-0.5 rounded mr-1 transition-all duration-200",
+              "p-0.5 rounded mr-0.5 transition-all duration-200",
               "hover:bg-muted active:bg-accent"
             )}
             style={{ marginLeft: indentPixels }}
@@ -150,7 +150,7 @@ function MailboxTreeItem({
           onClick={() => !isVirtualNode && onMailboxSelect?.(node.id)}
           disabled={isVirtualNode}
           className={cn(
-            "flex-1 flex items-center text-left py-1 lg:py-1 max-lg:py-2 px-1 rounded",
+            "flex-1 flex items-center text-left py-0.5 lg:py-1 max-lg:py-1 px-1 rounded text-xs sm:text-sm",
             "transition-colors duration-150",
             isVirtualNode && "cursor-default"
           )}

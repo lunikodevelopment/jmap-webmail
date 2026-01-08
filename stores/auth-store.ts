@@ -13,8 +13,9 @@ interface AuthState {
   client: JMAPClient | null;
   identities: Identity[];
   primaryIdentity: Identity | null;
+  rememberMe: boolean;
 
-  login: (serverUrl: string, username: string, password: string) => Promise<boolean>;
+  login: (serverUrl: string, username: string, password: string, rememberMe?: boolean) => Promise<boolean>;
   logout: () => void;
   checkAuth: () => Promise<void>;
   clearError: () => void;
@@ -31,8 +32,9 @@ export const useAuthStore = create<AuthState>()(
       client: null,
       identities: [],
       primaryIdentity: null,
+      rememberMe: false,
 
-      login: async (serverUrl, username, password) => {
+      login: async (serverUrl, username, password, rememberMe = false) => {
         set({ isLoading: true, error: null });
 
         try {
@@ -46,7 +48,16 @@ export const useAuthStore = create<AuthState>()(
           const identities = await client.getIdentities();
           const primaryIdentity = identities.length > 0 ? identities[0] : null;
 
-          // Success - save state (but NOT the password)
+          // If remember me is enabled, store password in sessionStorage
+          if (rememberMe) {
+            try {
+              sessionStorage.setItem('auth-pwd', btoa(password));
+            } catch (e) {
+              console.warn('Failed to store remember me credentials:', e);
+            }
+          }
+
+          // Success - save state
           set({
             isAuthenticated: true,
             isLoading: false,
@@ -55,6 +66,7 @@ export const useAuthStore = create<AuthState>()(
             client,
             identities,
             primaryIdentity,
+            rememberMe,
             error: null,
           });
 
@@ -100,11 +112,13 @@ export const useAuthStore = create<AuthState>()(
           client: null,
           identities: [],
           primaryIdentity: null,
+          rememberMe: false,
           error: null,
         });
 
         // Clear persisted storage
         localStorage.removeItem('auth-storage');
+        sessionStorage.removeItem('auth-pwd');
 
         // Clear email store state
         useEmailStore.setState({
@@ -122,16 +136,55 @@ export const useAuthStore = create<AuthState>()(
       checkAuth: async () => {
         const state = get();
 
-        // If authenticated but no client (e.g., after page refresh), we can't restore the session
-        // because we don't store passwords for security reasons
+        // If not authenticated, check if we can restore from remember me
+        if (!state.isAuthenticated && state.rememberMe && state.serverUrl && state.username) {
+          try {
+            const storedPassword = sessionStorage.getItem('auth-pwd');
+            if (storedPassword) {
+              const password = atob(storedPassword);
+              // Try to restore the session
+              const success = await get().login(state.serverUrl, state.username, password, true);
+              if (success) {
+                console.log('Session restored from remember me');
+                return;
+              }
+            }
+          } catch (error) {
+            console.error('Failed to restore session from remember me:', error);
+            // Clear invalid credentials
+            sessionStorage.removeItem('auth-pwd');
+            set({ rememberMe: false });
+          }
+        }
+
+        // If authenticated but no client (e.g., after page refresh), try to restore
+        if (state.isAuthenticated && !state.client && state.rememberMe && state.serverUrl && state.username) {
+          try {
+            const storedPassword = sessionStorage.getItem('auth-pwd');
+            if (storedPassword) {
+              const password = atob(storedPassword);
+              // Try to restore the session
+              const success = await get().login(state.serverUrl, state.username, password, true);
+              if (success) {
+                console.log('Session restored after page refresh');
+                return;
+              }
+            }
+          } catch (error) {
+            console.error('Failed to restore session after refresh:', error);
+            sessionStorage.removeItem('auth-pwd');
+          }
+        }
+
+        // If we can't restore, reset auth state
         if (state.isAuthenticated && !state.client) {
-          // Reset auth state - user will need to log in again
           set({
             isAuthenticated: false,
             isLoading: false,
             client: null,
             serverUrl: null,
             username: null,
+            rememberMe: false,
           });
         }
 
@@ -144,10 +197,10 @@ export const useAuthStore = create<AuthState>()(
     {
       name: 'auth-storage',
       partialize: (state) => ({
-        // Only persist non-sensitive data
+        // Only persist non-sensitive data (except rememberMe which is just a flag)
         serverUrl: state.serverUrl,
         username: state.username,
-        // Don't persist isAuthenticated since we can't restore the session without a password
+        rememberMe: state.rememberMe,
       }),
     }
   )
