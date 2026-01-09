@@ -1259,13 +1259,21 @@ export class JMAPClient {
     if (identityResponse.methodResponses?.[0]?.[0] === "Identity/get") {
       const identities = (identityResponse.methodResponses[0][1].list || []) as { id: string; email: string; name: string }[];
 
+      if (identities.length === 0) {
+        throw new Error('No identities available on this account. Cannot send email without an identity.');
+      }
+
       if (selectedIdentityId) {
         // Find the selected identity
         selectedIdentity = identities.find((id) => id.id === selectedIdentityId) || null;
         if (selectedIdentity) {
           identityId = selectedIdentity.id;
+        } else {
+          console.warn(`Selected identity ${selectedIdentityId} not found, falling back to first identity`);
+          selectedIdentity = identities[0];
+          identityId = selectedIdentity.id;
         }
-      } else if (identities.length > 0) {
+      } else {
         // Use the first identity (or find one matching the fromEmail/username)
         selectedIdentity = identities.find((id) => id.email === (fromEmail || this.username)) || identities[0];
         identityId = selectedIdentity.id;
@@ -1273,7 +1281,7 @@ export class JMAPClient {
     }
 
     if (!identityId) {
-      identityId = this.accountId; // fallback
+      throw new Error('Unable to determine a valid identity for sending email');
     }
 
     const methodCalls: JMAPMethodCall[] = [];
@@ -1374,6 +1382,8 @@ export class JMAPClient {
           const errors = result.notCreated || result.notUpdated;
           const firstError = Object.values(errors)[0] as { description?: string; type?: string };
           console.error('Email send error:', firstError);
+          console.error('Used identityId:', identityId);
+          console.error('Available identities:', selectedIdentity);
           throw new Error(firstError?.description || firstError?.type || 'Failed to send email');
         }
       }

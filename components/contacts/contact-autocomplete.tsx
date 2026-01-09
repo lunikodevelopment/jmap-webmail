@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { useContactsStore } from '@/stores/contacts-store';
+import { useAuthStore } from '@/stores/auth-store';
 import { Avatar } from '@/components/ui/avatar';
 import { Mail, Users } from 'lucide-react';
 import type { Contact } from '@/lib/jmap/types';
@@ -26,8 +27,18 @@ export function ContactAutocomplete({
   placeholder,
   className,
 }: ContactAutocompleteProps) {
-  const { contacts } = useContactsStore();
+  const { client, isAuthenticated } = useAuthStore();
+  const { contacts, initializeSync, lastSyncTime } = useContactsStore();
   const [suggestions, setSuggestions] = useState<EmailSuggestion[]>([]);
+
+  // Auto-fetch contacts if they haven't been loaded yet
+  useEffect(() => {
+    if (client && isAuthenticated && contacts.length === 0 && !lastSyncTime) {
+      console.log('Fetching contacts for autocomplete...');
+      void initializeSync(client);
+    }
+  }, [client, isAuthenticated, contacts.length, lastSyncTime, initializeSync]);
+
   const [isOpen, setIsOpen] = useState(false);
   const [selectedIndex, setSelectedIndex] = useState(-1);
   const inputRef = useRef<HTMLInputElement>(null);

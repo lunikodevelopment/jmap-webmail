@@ -67,7 +67,19 @@
     "to_recipients": "To {{count}} recipients",
     "and_others": "and {{count}} others",
     "draft": "Draft",
-    "starred": "Starred"
+    "starred": "Starred",
+    "conversations_count": "{count} of {total} conversations",
+    "conversations_count_plus": "{count}+ conversations",
+    "conversations_count_simple": "{count} conversations",
+    "no_conversations": "No conversations",
+    "loading_more": "Loading more emails...",
+    "no_more_emails": "No more emails to load",
+    "batch_actions": {
+      "mark_read": "Mark as read",
+      "mark_unread": "Mark as unread",
+      "delete": "Delete",
+      "clear_selection": "Clear selection"
+    }
   },
   "email_viewer": {
     "no_email_selected": "No email selected",

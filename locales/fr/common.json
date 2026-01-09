@@ -65,7 +65,19 @@
     "to_recipients": "À {{count}} destinataires",
     "and_others": "et {{count}} autres",
     "draft": "Brouillon",
-    "starred": "Favori"
+    "starred": "Favori",
+    "conversations_count": "{count} sur {total} conversations",
+    "conversations_count_plus": "{count}+ conversations",
+    "conversations_count_simple": "{count} conversations",
+    "no_conversations": "Aucune conversation",
+    "loading_more": "Chargement d'autres emails...",
+    "no_more_emails": "Plus d'emails à charger",
+    "batch_actions": {
+      "mark_read": "Marquer comme lu",
+      "mark_unread": "Marquer comme non lu",
+      "delete": "Supprimer",
+      "clear_selection": "Effacer la sélection"
+    }
   },
   "email_viewer": {
     "no_email_selected": "Aucun email sélectionné",
